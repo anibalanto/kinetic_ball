@@ -1,0 +1,29 @@
+[package]
+name = "server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[dependencies]
+shared = { path = "../shared", features = ["bevy"] }
+
+# Bevy (headless - sin rendering)
+bevy = { workspace = true, default-features = false, features = [
+    "bevy_asset",
+    "bevy_scene",
+    "bevy_core_pipeline",
+    "multi_threaded",
+] }
+bevy_rapier2d = { workspace = true, features = ["simd-stable"] }
+
+# Networking
+tokio = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+bytes = { workspace = true }
+
+# Utilidades
+anyhow = { workspace = true }

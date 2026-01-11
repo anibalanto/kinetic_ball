@@ -1,0 +1,25 @@
+[package]
+name = "client"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "client"
+path = "src/main.rs"
+
+[dependencies]
+shared = { path = "../shared", features = ["bevy"] }
+
+# Bevy (con rendering completo)
+bevy = { workspace = true }
+bevy_rapier2d = { workspace = true }
+
+# Networking
+tokio = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+bytes = { workspace = true }
+
+# Utilidades
+anyhow = { workspace = true }
+clap = { workspace = true }

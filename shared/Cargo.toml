@@ -1,0 +1,12 @@
+[package]
+name = "shared"
+version.workspace = true
+edition.workspace = true
+
+[features]
+bevy = ["dep:bevy"]
+
+[dependencies]
+serde.workspace = true
+bincode.workspace = true
+bevy = { workspace = true, optional = true, default-features = false }
