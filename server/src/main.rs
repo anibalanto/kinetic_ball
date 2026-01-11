@@ -218,9 +218,12 @@ async fn handle_client(
                         println!("[{:?}] 🔍 Mensaje deserializado: {:?}", std::time::Instant::now(), std::mem::discriminant(&msg));
                         match msg {
                             ClientMessage::Ready => {
-                                // Enviamos un evento a Bevy o usamos un recurso compartido
-                                // para marcar al jugador como listo en el mundo de Bevy.
-                                let _ = event_tx.send(NetworkEvent::PlayerReady { id: player_id.unwrap() }).await;
+                                if let Some(id) = player_id {
+                                    println!("✅ Jugador {} marcado como READY", id);
+                                    let _ = event_tx.send(NetworkEvent::PlayerReady { id }).await;
+                                } else {
+                                    println!("⚠️ Recibido Ready sin player_id asignado");
+                                }
                             }
                             ClientMessage::Join { player_name, .. } => {
                                 let id = {
@@ -247,11 +250,12 @@ async fn handle_client(
                             }
 
                             ClientMessage::Input { input, .. } => {
+                                // Usamos {:?} para el Option
+                                println!("📥 [Server] Recibido Input de jugador {:?}: Up={}, Down={}, Left={}, Right={}",
+                                    player_id, input.move_up, input.move_down, input.move_left, input.move_right);
+
                                 if let Some(id) = player_id {
-                                    let _ = event_tx.send(NetworkEvent::PlayerInput {
-                                        id,
-                                        input
-                                    }).await;
+                                    let _ = event_tx.send(NetworkEvent::PlayerInput { id, input }).await;
                                 }
                             }
 
@@ -425,8 +429,14 @@ fn process_network_messages(
                 }
             }
 
-            NetworkEvent::PlayerReady { .. } => {
-                // No hacemos nada aquí porque lo maneja handle_ready_events
+            NetworkEvent::PlayerReady { id } => {
+                for (mut player, _) in players.iter_mut() {
+                    if player.id == id {
+                        player.is_ready = true;
+                        println!("✅ Jugador {} marcado como READY en el loop de juego", id);
+                        break;
+                    }
+                }
             }
         }
     }

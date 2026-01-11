@@ -73,7 +73,6 @@ fn main() {
         ))
         // Lógica visual y renderizado (frecuencia del monitor)
         .add_systems(Update, (
-            sync_players,          // Spawnea o actualiza entidades
             interpolate_entities,  // Suaviza el movimiento entre posiciones de red
             camera_follow_player,  // La cámara debe seguir al jugador cada frame
         ))
@@ -127,71 +126,95 @@ struct Interpolated {
 
 async fn start_network_client(
     addr: String,
-    player_name_arg: String, // Cambiamos el nombre para evitar colisiones
+    player_name_arg: String,
     network_tx: mpsc::Sender<ServerMessage>,
     mut input_rx: mpsc::Receiver<shared::protocol::ClientMessage>
 ) {
-    println!("🔌 Conectando al servidor en {}...", addr);
+    println!("🔌 [Red] Intentando conectar al servidor en {}...", addr);
     let socket = TcpStream::connect(addr).await.expect("Fallo al conectar");
     let (mut read_half, mut write_half) = socket.into_split();
+    println!("✅ [Red] Conectado exitosamente");
 
-    // CLONAMOS las variables necesarias antes de moverlas al hilo (spawn)
-    let name_to_send = player_name_arg.clone();
+    // ==========================================
+    // FASE 1: HANDSHAKE SINCRÓNICO
+    // ==========================================
 
-    // --- TASK DE ENVÍO ---
+    // 1. Enviar JOIN
+    let join_msg = ClientMessage::Join {
+        player_name: player_name_arg.clone(),
+        input_type: NetworkInputType::Keyboard,
+    };
+    if let Ok(data) = bincode::serialize(&join_msg) {
+        println!("📤 [Red -> Servidor] Enviando JOIN...");
+        write_half.write_all(&(data.len() as u32).to_le_bytes()).await.unwrap();
+        write_half.write_all(&data).await.unwrap();
+    }
+
+    // 2. Leer WELCOME del servidor (bloqueante, pero está bien aquí)
+    let mut len_buf = [0u8; 4];
+    read_half.read_exact(&mut len_buf).await.expect("Error leyendo Welcome");
+    let len = u32::from_le_bytes(len_buf) as usize;
+
+    let mut buffer = vec![0u8; len];
+    read_half.read_exact(&mut buffer).await.expect("Error leyendo datos Welcome");
+
+    match bincode::deserialize::<ServerMessage>(&buffer) {
+        Ok(ServerMessage::Welcome { player_id, game_config }) => {
+            println!("🎉 [Red] WELCOME recibido! Player ID: {}", player_id);
+            // Enviar el Welcome a Bevy
+            let _ = network_tx.send(ServerMessage::Welcome { player_id, game_config }).await;
+        }
+        _ => panic!("Se esperaba Welcome pero se recibió otro mensaje"),
+    }
+
+    // 3. Enviar READY inmediatamente después de recibir Welcome
+    let ready_msg = ClientMessage::Ready;
+    if let Ok(data) = bincode::serialize(&ready_msg) {
+        println!("📤 [Red -> Servidor] Enviando READY...");
+        write_half.write_all(&(data.len() as u32).to_le_bytes()).await.unwrap();
+        write_half.write_all(&data).await.unwrap();
+    }
+
+    println!("✅ [Red] Handshake completo. Iniciando comunicación bidireccional...");
+
+    // ==========================================
+    // FASE 2: COMUNICACIÓN BIDIRECCIONAL
+    // ==========================================
+
+    // Task de envío de inputs (ya no necesita lógica de handshake)
     tokio::spawn(async move {
-        // 1. Enviar JOIN
-        let join_msg = ClientMessage::Join {
-            player_name: name_to_send,
-            input_type: NetworkInputType::Keyboard,
-        };
-
-        if let Ok(data) = bincode::serialize(&join_msg) {
-            let _ = write_half.write_all(&(data.len() as u32).to_le_bytes()).await;
-            let _ = write_half.write_all(&data).await;
-        }
-
-        // 2. ESPERAR SEÑAL DE BEVY:
-        // El primer input que llega por 'input_rx' indica que Bevy ya cargó.
-        if let Some(primer_input) = input_rx.recv().await {
-            println!("🎮 Bevy e Intel Iris listos. Enviando READY...");
-
-            let ready_msg = ClientMessage::Ready;
-            if let Ok(data) = bincode::serialize(&ready_msg) {
-                let _ = write_half.write_all(&(data.len() as u32).to_le_bytes()).await;
-                let _ = write_half.write_all(&data).await;
-            }
-
-            // Enviamos ese primer input
-            enviar_input_packet(&mut write_half, primer_input).await;
-        }
-
-        // 3. Loop normal de inputs (usando input_rx)
         while let Some(input) = input_rx.recv().await {
             enviar_input_packet(&mut write_half, input).await;
         }
     });
 
-    // --- LOOP DE RECEPCIÓN (EL QUE YA TENÍAS) ---
+    // Loop de recepción (este ya lo tenías)
     let mut buffer = vec![0u8; 65536];
     loop {
         let mut len_buf = [0u8; 4];
-        // Timeout de 20s para dar tiempo a la GPU
         match tokio::time::timeout(std::time::Duration::from_secs(20), read_half.read_exact(&mut len_buf)).await {
             Ok(Ok(_)) => {
                 let len = u32::from_le_bytes(len_buf) as usize;
                 if len > buffer.len() { buffer.resize(len, 0); }
-                if let Err(_) = read_half.read_exact(&mut buffer[..len]).await { break; }
+                if let Err(e) = read_half.read_exact(&mut buffer[..len]).await {
+                    println!("❌ [Red] Error leyendo datos del servidor: {:?}", e);
+                    break;
+                }
 
                 if let Ok(msg) = bincode::deserialize::<ServerMessage>(&buffer[..len]) {
-                    // Usamos try_send para no bloquear la red si Bevy está lento
-                    if let Err(mpsc::error::TrySendError::Closed(_)) = network_tx.try_send(msg) {
+                    // Log para mensajes que no sean GameState (para no llenar la consola)
+                    if !matches!(msg, ServerMessage::GameState { .. }) {
+                        println!("📥 [Red <- Servidor] Mensaje recibido: {:?}", msg);
+                    }
+
+                    if let Err(_) = network_tx.try_send(msg) {
+                        println!("⚠️ [Red] El canal de Bevy se ha cerrado");
                         break;
                     }
                 }
             }
             _ => {
-                println!("🔌 Timeout o error de conexión (20s sin datos)");
+                println!("🔌 [Red] Timeout o error de conexión (20s sin datos)");
                 break;
             }
         }
@@ -201,20 +224,29 @@ async fn start_network_client(
 // Antes: ...input: PlayerInput
 async fn enviar_input_packet(
     write: &mut tokio::net::tcp::OwnedWriteHalf,
-    msg: shared::protocol::ClientMessage // <--- CAMBIA ESTO
+    msg: shared::protocol::ClientMessage
 ) {
     use tokio::io::AsyncWriteExt;
 
-    // Serializamos el mensaje completo
-    let serialized = bincode::serialize(&msg).expect("Fallo al serializar mensaje");
+    if let Ok(data) = bincode::serialize(&msg) {
+        // 1. Enviar longitud (u32, 4 bytes)
+        let len = data.len() as u32;
+        if let Err(e) = write.write_all(&len.to_le_bytes()).await {
+            eprintln!("❌ Error enviando longitud: {}", e);
+            return;
+        }
 
-    // Opcional: Enviar el tamaño primero si tu servidor lo requiere,
-    // pero si el servidor usa bincode::deserialize_from, esto suele bastar:
-    if let Err(e) = write.write_all(&serialized).await {
-        eprintln!("❌ Error enviando paquete al servidor: {}", e);
+        // 2. Enviar datos
+        if let Err(e) = write.write_all(&data).await {
+            eprintln!("❌ Error enviando datos: {}", e);
+        }
+
+        // Log opcional para verificar en el cliente
+        if matches!(msg, ClientMessage::Input { .. }) {
+            // println!("🕹️ [Cliente] Input enviado al servidor ({} bytes)", data.len());
+        }
     }
 }
-
 // ============================================================================
 // GAME SYSTEMS
 // ============================================================================
@@ -260,12 +292,10 @@ fn handle_input(
     my_player_id: Res<MyPlayerId>,
     mut previous_input: ResMut<PreviousInput>,
 ) {
-    // Solo enviar input si ya tenemos un ID asignado
     if my_player_id.0.is_none() {
         return;
     }
 
-    // Construir input del frame actual
     let input = PlayerInput {
         move_up: keyboard.pressed(KeyCode::ArrowUp) || keyboard.pressed(KeyCode::KeyW),
         move_down: keyboard.pressed(KeyCode::ArrowDown) || keyboard.pressed(KeyCode::KeyS),
@@ -278,14 +308,18 @@ fn handle_input(
         sprint: keyboard.pressed(KeyCode::ShiftLeft),
     };
 
-    // Solo enviar si el input cambió (más eficiente)
     if input != previous_input.0 {
+        // --- LOG DE MOVIMIENTO DETECTADO ---
+        println!("🕹️ [Bevy] Cambio de input detectado. Enviando al hilo de red...");
+
         let msg = shared::protocol::ClientMessage::Input {
-            sequence: 0, // Por ahora usamos 0
-            input: input, // Aquí pasamos el PlayerInput que el sistema detectó
+            sequence: 0,
+            input: input.clone(),
         };
 
-        let _ = input_sender.0.try_send(msg);
+        if let Err(e) = input_sender.0.try_send(msg) {
+            println!("⚠️ [Bevy] Error enviando input al canal: {:?}", e);
+        }
         previous_input.0 = input;
     }
 }
@@ -318,67 +352,97 @@ fn process_network_messages(
     mut commands: Commands,
     network_rx: Res<NetworkReceiver>,
     mut my_id: ResMut<MyPlayerId>,
-    mut ball_q: Query<(&mut Interpolated, &RemoteBall), Without<RemotePlayer>>,
-    mut players_q: Query<(&mut Interpolated, &RemotePlayer), Without<RemoteBall>>,
+    mut ball_q: Query<(&mut Interpolated, &mut Transform, &RemoteBall), Without<RemotePlayer>>,
+    mut players_q: Query<(&mut Interpolated, &mut Transform, &RemotePlayer), (Without<RemoteBall>, Without<MainCamera>)>,
 ) {
     let mut rx = network_rx.0.lock().unwrap();
+    let mut ball_spawned = false;
+    let mut spawned_this_frame = std::collections::HashSet::new();
+
+    // Procesar solo el último GameState si hay múltiples
+    let mut last_game_state: Option<(Vec<shared::protocol::PlayerState>, shared::protocol::BallState)> = None;
+    let mut messages = Vec::new();
+
     while let Ok(msg) = rx.try_recv() {
+        messages.push(msg);
+    }
+
+    for msg in messages {
         match msg {
             ServerMessage::Welcome { player_id, .. } => {
+                println!("🎉 [Bevy] Welcome recibido. Mi PlayerID es: {}", player_id);
                 my_id.0 = Some(player_id);
             }
             ServerMessage::GameState { players, ball, .. } => {
-                // Actualizar Pelota
-                if let Ok((mut interp, _)) = ball_q.get_single_mut() {
-                    interp.target_position = Vec2::new(ball.position.0, ball.position.1);
-                    interp.target_velocity = Vec2::new(ball.velocity.0, ball.velocity.1);
-                } else {
-                    commands.spawn((
-                        SpriteBundle {
-                            sprite: Sprite { color: Color::WHITE, custom_size: Some(Vec2::splat(15.0)), ..default() },
-                            ..default()
-                        },
-                        RemoteBall,
-                        Interpolated {
-                            target_position: Vec2::new(ball.position.0, ball.position.1),
-                            target_velocity: Vec2::new(ball.velocity.0, ball.velocity.1),
-                            smoothing: 20.0,
-                        },
-                    ));
-                }
-
-                // Actualizar Jugadores
-                for ps in players {
-                    let mut found = false;
-                    for (mut interp, rp) in players_q.iter_mut() {
-                        if rp.id == ps.id {
-                            interp.target_position = ps.position;
-                            interp.target_velocity = Vec2::new(ps.velocity.0, ps.velocity.1);
-                            found = true;
-                            break;
-                        }
-                    }
-                    if !found {
-                        commands.spawn((
-                            SpriteBundle {
-                                sprite: Sprite {
-                                    color: if my_id.0 == Some(ps.id) { Color::srgb(0.2, 0.4, 1.0) } else { Color::srgb(1.0, 0.3, 0.3) },
-                                    custom_size: Some(Vec2::splat(45.0)),
-                                    ..default()
-                                },
-                                ..default()
-                            },
-                            RemotePlayer { id: ps.id, name: ps.name.clone() },
-                            Interpolated {
-                                target_position: ps.position,
-                                target_velocity: Vec2::new(ps.velocity.0, ps.velocity.1),
-                                smoothing: 15.0,
-                            },
-                        ));
-                    }
-                }
+                last_game_state = Some((players, ball));
             }
             _ => {}
+        }
+    }
+
+    // Procesar solo el último GameState si existe
+    if let Some((players, ball)) = last_game_state {
+        // Actualizar Pelota
+        let ball_exists = !ball_q.is_empty();
+        if ball_exists {
+            for (mut interp, mut transform, _) in ball_q.iter_mut() {
+                interp.target_position = Vec2::new(ball.position.0, ball.position.1);
+                interp.target_velocity = Vec2::new(ball.velocity.0, ball.velocity.1);
+                transform.translation.x = ball.position.0;
+                transform.translation.y = ball.position.1;
+            }
+        } else if !ball_spawned {
+            ball_spawned = true;
+            println!("⚽ [Bevy] Spawneando pelota visual en {:?}", ball.position);
+            commands.spawn((
+                SpriteBundle {
+                    sprite: Sprite { color: Color::WHITE, custom_size: Some(Vec2::splat(15.0)), ..default() },
+                    transform: Transform::from_xyz(ball.position.0, ball.position.1, 1.0),
+                    ..default()
+                },
+                RemoteBall,
+                Interpolated {
+                    target_position: Vec2::new(ball.position.0, ball.position.1),
+                    target_velocity: Vec2::new(ball.velocity.0, ball.velocity.1),
+                    smoothing: 20.0,
+                },
+            ));
+        }
+
+        // Actualizar Jugadores
+        for ps in players {
+            let mut found = false;
+            for (mut interp, mut transform, rp) in players_q.iter_mut() {
+                if rp.id == ps.id {
+                    interp.target_position = ps.position;
+                    interp.target_velocity = Vec2::new(ps.velocity.0, ps.velocity.1);
+                    transform.translation.x = ps.position.x;
+                    transform.translation.y = ps.position.y;
+                    found = true;
+                    break;
+                }
+            }
+            if !found && !spawned_this_frame.contains(&ps.id) {
+                spawned_this_frame.insert(ps.id);
+                println!("🆕 [Bevy] Spawneando jugador visual: {} (ID: {})", ps.name, ps.id);
+                commands.spawn((
+                    SpriteBundle {
+                        sprite: Sprite {
+                            color: if my_id.0 == Some(ps.id) { Color::srgb(0.2, 0.4, 1.0) } else { Color::srgb(1.0, 0.3, 0.3) },
+                            custom_size: Some(Vec2::splat(45.0)),
+                            ..default()
+                        },
+                        transform: Transform::from_xyz(ps.position.x, ps.position.y, 2.0),
+                        ..default()
+                    },
+                    RemotePlayer { id: ps.id, name: ps.name.clone() },
+                    Interpolated {
+                        target_position: ps.position,
+                        target_velocity: Vec2::new(ps.velocity.0, ps.velocity.1),
+                        smoothing: 15.0,
+                    },
+                ));
+            }
         }
     }
 }
@@ -414,45 +478,3 @@ fn camera_follow_player(
     }
 }
 
-fn sync_players(
-    mut commands: Commands,
-    network_rx: Res<NetworkReceiver>,
-    // Usamos el nombre completo para evitar ambigüedades
-    mut query: Query<(Entity, &mut Transform, &shared::protocol::PlayerState)>,
-) {
-    let Ok(mut receiver) = network_rx.0.lock() else { return; };
-
-    while let Ok(msg) = receiver.try_recv() {
-        if let ServerMessage::GameState { players, .. } = msg {
-            for network_player in players {
-                let existing = query.iter_mut().find(|(_, _, p)| p.id == network_player.id);
-
-                // Convertimos la posición de tupla (f32, f32) a Vec3 de Bevy
-                let pos_vec3 = Vec3::new(network_player.position.x, network_player.position.y, 0.0);
-
-                if let Some((_, mut transform, _)) = existing {
-                    transform.translation = pos_vec3;
-                } else {
-                    println!("🆕 Spawneando jugador: {}", network_player.name);
-
-                    commands.spawn((
-                        SpriteBundle {
-                            sprite: Sprite {
-                                color: if network_player.id == 1 {
-                                    Color::srgb(1.0, 0.0, 0.0)
-                                } else {
-                                    Color::srgb(0.0, 0.0, 1.0)
-                                },
-                                custom_size: Some(Vec2::splat(30.0)),
-                                ..default()
-                            },
-                            transform: Transform::from_translation(pos_vec3),
-                            ..default()
-                        },
-                        network_player.clone(),
-                    ));
-                }
-            }
-        }
-    }
-}
