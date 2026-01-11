@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use bevy::prelude::{Vec2, Component};
 
 /// Mensajes que el cliente envía al servidor
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,11 +61,11 @@ pub enum ServerMessage {
 }
 
 /// Estado completo de un jugador
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug, Component)]
 pub struct PlayerState {
     pub id: u32,
     pub name: String,
-    pub position: (f32, f32),
+    pub position: Vec2,
     pub velocity: (f32, f32),
     pub rotation: f32,
     pub kick_charge: f32,

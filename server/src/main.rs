@@ -646,7 +646,7 @@ fn broadcast_game_state(
         .map(|(player, transform, velocity)| PlayerState {
             id: player.id,
             name: player.name.clone(),
-            position: (transform.translation.x, transform.translation.y),
+            position: Vec2::new(transform.translation.x, transform.translation.y),
             velocity: (velocity.linvel.x, velocity.linvel.y),
             rotation: 0.0,
             kick_charge: player.kick_charge,
