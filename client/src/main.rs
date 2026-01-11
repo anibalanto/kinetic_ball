@@ -1,14 +1,10 @@
 use bevy::prelude::*;
 use clap::Parser;
-use shared::*;
+use shared::protocol::{ClientMessage, GameConfig, NetworkInputType, PlayerInput, ServerMessage};
+use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use std::sync::{Arc, Mutex};
-use bevy_rapier2d::prelude::Velocity;
-use shared::protocol::BallState as Ball;
-use bevy::prelude::*;
-use shared::protocol::{PlayerState, BallState, ServerMessage, ClientMessage, PlayerInput, NetworkInputType, GameConfig};
 
 #[derive(Parser, Debug)]
 #[command(name = "Haxball Client")]
@@ -64,25 +60,27 @@ fn main() {
         .insert_resource(InputSender(input_tx))
         .insert_resource(MyPlayerId(None))
         .insert_resource(PreviousInput::default())
-        .insert_resource(HeartbeatTimer(Timer::from_seconds(1.0, TimerMode::Repeating)))
         .add_systems(Startup, setup)
         // Lógica de red y entrada (frecuencia fija)
-        .add_systems(FixedUpdate, (
-            handle_input,              // Enviamos inputs al ritmo del tickrate
-            process_network_messages,  // Procesamos paquetes llegados
-        ))
+        .add_systems(
+            FixedUpdate,
+            (
+                handle_input,             // Enviamos inputs al ritmo del tickrate
+                process_network_messages, // Procesamos paquetes llegados
+            ),
+        )
         // Lógica visual y renderizado (frecuencia del monitor)
-        .add_systems(Update, (
-            interpolate_entities,  // Suaviza el movimiento entre posiciones de red
-            camera_follow_player,  // La cámara debe seguir al jugador cada frame
-        ))
+        .add_systems(
+            Update,
+            (
+                interpolate_entities, // Suaviza el movimiento entre posiciones de red
+                camera_follow_player, // La cámara debe seguir al jugador cada frame
+                update_charge_bar,    // Actualiza la barra de carga de patada
+            ),
+        )
         .run();
 
     println!("✅ [Bevy] App::run() ha finalizado normalmente");
-}
-
-fn debug_circle(mut gizmos: Gizmos) {
-    gizmos.circle_2d(Vec2::ZERO, 100.0, Color::WHITE);
 }
 
 // ============================================================================
@@ -105,7 +103,7 @@ struct MyPlayerId(Option<u32>);
 #[derive(Component)]
 struct RemotePlayer {
     id: u32,
-    name: String,
+    kick_charge: f32,
 }
 
 #[derive(Component)]
@@ -118,8 +116,12 @@ struct MainCamera;
 struct Interpolated {
     target_position: Vec2,
     target_velocity: Vec2,
+    target_rotation: f32,
     smoothing: f32,
 }
+
+#[derive(Component)]
+struct KickChargeBar;
 // ============================================================================
 // NETWORK CLIENT (Tokio)
 // ============================================================================
@@ -128,7 +130,7 @@ async fn start_network_client(
     addr: String,
     player_name_arg: String,
     network_tx: mpsc::Sender<ServerMessage>,
-    mut input_rx: mpsc::Receiver<shared::protocol::ClientMessage>
+    mut input_rx: mpsc::Receiver<shared::protocol::ClientMessage>,
 ) {
     println!("🔌 [Red] Intentando conectar al servidor en {}...", addr);
     let socket = TcpStream::connect(addr).await.expect("Fallo al conectar");
@@ -146,23 +148,40 @@ async fn start_network_client(
     };
     if let Ok(data) = bincode::serialize(&join_msg) {
         println!("📤 [Red -> Servidor] Enviando JOIN...");
-        write_half.write_all(&(data.len() as u32).to_le_bytes()).await.unwrap();
+        write_half
+            .write_all(&(data.len() as u32).to_le_bytes())
+            .await
+            .unwrap();
         write_half.write_all(&data).await.unwrap();
     }
 
     // 2. Leer WELCOME del servidor (bloqueante, pero está bien aquí)
     let mut len_buf = [0u8; 4];
-    read_half.read_exact(&mut len_buf).await.expect("Error leyendo Welcome");
+    read_half
+        .read_exact(&mut len_buf)
+        .await
+        .expect("Error leyendo Welcome");
     let len = u32::from_le_bytes(len_buf) as usize;
 
     let mut buffer = vec![0u8; len];
-    read_half.read_exact(&mut buffer).await.expect("Error leyendo datos Welcome");
+    read_half
+        .read_exact(&mut buffer)
+        .await
+        .expect("Error leyendo datos Welcome");
 
     match bincode::deserialize::<ServerMessage>(&buffer) {
-        Ok(ServerMessage::Welcome { player_id, game_config }) => {
+        Ok(ServerMessage::Welcome {
+            player_id,
+            game_config,
+        }) => {
             println!("🎉 [Red] WELCOME recibido! Player ID: {}", player_id);
             // Enviar el Welcome a Bevy
-            let _ = network_tx.send(ServerMessage::Welcome { player_id, game_config }).await;
+            let _ = network_tx
+                .send(ServerMessage::Welcome {
+                    player_id,
+                    game_config,
+                })
+                .await;
         }
         _ => panic!("Se esperaba Welcome pero se recibió otro mensaje"),
     }
@@ -171,7 +190,10 @@ async fn start_network_client(
     let ready_msg = ClientMessage::Ready;
     if let Ok(data) = bincode::serialize(&ready_msg) {
         println!("📤 [Red -> Servidor] Enviando READY...");
-        write_half.write_all(&(data.len() as u32).to_le_bytes()).await.unwrap();
+        write_half
+            .write_all(&(data.len() as u32).to_le_bytes())
+            .await
+            .unwrap();
         write_half.write_all(&data).await.unwrap();
     }
 
@@ -192,10 +214,17 @@ async fn start_network_client(
     let mut buffer = vec![0u8; 65536];
     loop {
         let mut len_buf = [0u8; 4];
-        match tokio::time::timeout(std::time::Duration::from_secs(20), read_half.read_exact(&mut len_buf)).await {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            read_half.read_exact(&mut len_buf),
+        )
+        .await
+        {
             Ok(Ok(_)) => {
                 let len = u32::from_le_bytes(len_buf) as usize;
-                if len > buffer.len() { buffer.resize(len, 0); }
+                if len > buffer.len() {
+                    buffer.resize(len, 0);
+                }
                 if let Err(e) = read_half.read_exact(&mut buffer[..len]).await {
                     println!("❌ [Red] Error leyendo datos del servidor: {:?}", e);
                     break;
@@ -224,7 +253,7 @@ async fn start_network_client(
 // Antes: ...input: PlayerInput
 async fn enviar_input_packet(
     write: &mut tokio::net::tcp::OwnedWriteHalf,
-    msg: shared::protocol::ClientMessage
+    msg: shared::protocol::ClientMessage,
 ) {
     use tokio::io::AsyncWriteExt;
 
@@ -251,29 +280,88 @@ async fn enviar_input_packet(
 // GAME SYSTEMS
 // ============================================================================
 
-fn setup(
-    mut commands: Commands,
-    config: Res<GameConfig>,
-    input_sender: Res<InputSender>,) {
-    // Cámara
-    commands.spawn((Camera2dBundle::default(), MainCamera));
+fn setup(mut commands: Commands, config: Res<GameConfig>, input_sender: Res<InputSender>) {
+    // Cámara (igual que RustBall: scale 2.0)
+    commands.spawn((
+        Camera2dBundle {
+            projection: bevy::render::camera::OrthographicProjection {
+                scale: 2.0,
+                ..default()
+            },
+            transform: Transform::from_xyz(0.0, 0.0, 999.0),
+            ..default()
+        },
+        MainCamera,
+    ));
 
-    // El Campo de Juego (Césped)
+    // El Campo de Juego (Césped) - Color verde de RustBall
     commands.spawn(SpriteBundle {
         sprite: Sprite {
-            color: Color::srgb(0.2, 0.4, 0.2), // Bevy 0.14 usa srgb
-            custom_size: Some(Vec2::new(800.0, 500.0)), // Valores fijos temporales
+            color: Color::srgb(0.2, 0.5, 0.2), // RGB(51, 127, 51) - Verde RustBall
+            custom_size: Some(Vec2::new(config.arena_width, config.arena_height)),
             ..default()
         },
         transform: Transform::from_xyz(0.0, 0.0, -10.0),
         ..default()
     });
 
-    if let Err(e) = input_sender.0.try_send(shared::protocol::ClientMessage::Ready) {
-            println!("⚠️ Error al enviar Ready desde Bevy: {:?}", e);
-        } else {
-            println!("🎮 Bevy e Intel Iris listos. Enviando READY al servidor...");
-        }
+    // Líneas blancas del campo (bordes) - igual que RustBall (z = 0.0)
+    let thickness = 5.0;
+    let w = config.arena_width;
+    let h = config.arena_height;
+
+    // Top
+    commands.spawn(SpriteBundle {
+        sprite: Sprite {
+            color: Color::WHITE,
+            custom_size: Some(Vec2::new(w + thickness, thickness)),
+            ..default()
+        },
+        transform: Transform::from_xyz(0.0, h / 2.0, 0.0),
+        ..default()
+    });
+
+    // Bottom
+    commands.spawn(SpriteBundle {
+        sprite: Sprite {
+            color: Color::WHITE,
+            custom_size: Some(Vec2::new(w + thickness, thickness)),
+            ..default()
+        },
+        transform: Transform::from_xyz(0.0, -h / 2.0, 0.0),
+        ..default()
+    });
+
+    // Left
+    commands.spawn(SpriteBundle {
+        sprite: Sprite {
+            color: Color::WHITE,
+            custom_size: Some(Vec2::new(thickness, h + thickness)),
+            ..default()
+        },
+        transform: Transform::from_xyz(-w / 2.0, 0.0, 0.0),
+        ..default()
+    });
+
+    // Right
+    commands.spawn(SpriteBundle {
+        sprite: Sprite {
+            color: Color::WHITE,
+            custom_size: Some(Vec2::new(thickness, h + thickness)),
+            ..default()
+        },
+        transform: Transform::from_xyz(w / 2.0, 0.0, 0.0),
+        ..default()
+    });
+
+    if let Err(e) = input_sender
+        .0
+        .try_send(shared::protocol::ClientMessage::Ready)
+    {
+        println!("⚠️ Error al enviar Ready desde Bevy: {:?}", e);
+    } else {
+        println!("🎮 Bevy e Intel Iris listos. Enviando READY al servidor...");
+    }
 
     println!("✅ Cliente configurado y campo listo");
 }
@@ -281,10 +369,6 @@ fn setup(
 // Resource para trackear el input anterior
 #[derive(Resource, Default)]
 struct PreviousInput(PlayerInput);
-
-// Resource para el heartbeat timer
-#[derive(Resource)]
-struct HeartbeatTimer(Timer);
 
 fn handle_input(
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -296,16 +380,17 @@ fn handle_input(
         return;
     }
 
+    // Mapeo de teclas EXACTO de RustBall
     let input = PlayerInput {
-        move_up: keyboard.pressed(KeyCode::ArrowUp) || keyboard.pressed(KeyCode::KeyW),
-        move_down: keyboard.pressed(KeyCode::ArrowDown) || keyboard.pressed(KeyCode::KeyS),
-        move_left: keyboard.pressed(KeyCode::ArrowLeft) || keyboard.pressed(KeyCode::KeyA),
-        move_right: keyboard.pressed(KeyCode::ArrowRight) || keyboard.pressed(KeyCode::KeyD),
-        kick: keyboard.pressed(KeyCode::Space),
-        curve_left: keyboard.pressed(KeyCode::KeyQ),
-        curve_right: keyboard.pressed(KeyCode::KeyE),
-        stop_interact: keyboard.pressed(KeyCode::ControlLeft),
-        sprint: keyboard.pressed(KeyCode::ShiftLeft),
+        move_up: keyboard.pressed(KeyCode::ArrowUp),
+        move_down: keyboard.pressed(KeyCode::ArrowDown),
+        move_left: keyboard.pressed(KeyCode::ArrowLeft),
+        move_right: keyboard.pressed(KeyCode::ArrowRight),
+        kick: keyboard.pressed(KeyCode::KeyS),
+        curve_left: keyboard.pressed(KeyCode::KeyA),
+        curve_right: keyboard.pressed(KeyCode::KeyD),
+        stop_interact: keyboard.pressed(KeyCode::ShiftLeft),
+        sprint: keyboard.pressed(KeyCode::Space),
     };
 
     if input != previous_input.0 {
@@ -324,43 +409,26 @@ fn handle_input(
     }
 }
 
-fn send_heartbeat(
-    time: Res<Time>,
-    mut heartbeat_timer: ResMut<HeartbeatTimer>,
-    input_sender: Res<InputSender>,
-    my_player_id: Res<MyPlayerId>,
-    previous_input: Res<PreviousInput>,
-) {
-    // Solo enviar heartbeat si ya conectamos
-    if my_player_id.0.is_none() {
-        return;
-    }
-
-    heartbeat_timer.0.tick(time.delta());
-
-    if heartbeat_timer.0.just_finished() {
-        let mensaje = shared::protocol::ClientMessage::Input {
-            sequence: 0, // Puedes usar 0 por ahora o un contador si tienes uno
-            input: previous_input.0.clone(),
-        };
-
-        let _ = input_sender.0.try_send(mensaje);
-    }
-}
-
 fn process_network_messages(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    config: Res<GameConfig>,
     network_rx: Res<NetworkReceiver>,
     mut my_id: ResMut<MyPlayerId>,
     mut ball_q: Query<(&mut Interpolated, &mut Transform, &RemoteBall), Without<RemotePlayer>>,
-    mut players_q: Query<(&mut Interpolated, &mut Transform, &RemotePlayer), (Without<RemoteBall>, Without<MainCamera>)>,
+    mut players_q: Query<
+        (&mut Interpolated, &mut Transform, &mut RemotePlayer),
+        (Without<RemoteBall>, Without<MainCamera>),
+    >,
 ) {
     let mut rx = network_rx.0.lock().unwrap();
-    let mut ball_spawned = false;
     let mut spawned_this_frame = std::collections::HashSet::new();
 
     // Procesar solo el último GameState si hay múltiples
-    let mut last_game_state: Option<(Vec<shared::protocol::PlayerState>, shared::protocol::BallState)> = None;
+    let mut last_game_state: Option<(
+        Vec<shared::protocol::PlayerState>,
+        shared::protocol::BallState,
+    )> = None;
     let mut messages = Vec::new();
 
     while let Ok(msg) = rx.try_recv() {
@@ -391,57 +459,111 @@ fn process_network_messages(
                 transform.translation.x = ball.position.0;
                 transform.translation.y = ball.position.1;
             }
-        } else if !ball_spawned {
-            ball_spawned = true;
+        } else {
             println!("⚽ [Bevy] Spawneando pelota visual en {:?}", ball.position);
-            commands.spawn((
-                SpriteBundle {
-                    sprite: Sprite { color: Color::WHITE, custom_size: Some(Vec2::splat(15.0)), ..default() },
-                    transform: Transform::from_xyz(ball.position.0, ball.position.1, 1.0),
-                    ..default()
-                },
-                RemoteBall,
-                Interpolated {
-                    target_position: Vec2::new(ball.position.0, ball.position.1),
-                    target_velocity: Vec2::new(ball.velocity.0, ball.velocity.1),
-                    smoothing: 20.0,
-                },
-            ));
+            // Igual que RustBall: usar textura con children
+            commands
+                .spawn((
+                    SpatialBundle {
+                        transform: Transform::from_xyz(ball.position.0, ball.position.1, 0.0),
+                        ..default()
+                    },
+                    RemoteBall,
+                    Interpolated {
+                        target_position: Vec2::new(ball.position.0, ball.position.1),
+                        target_velocity: Vec2::new(ball.velocity.0, ball.velocity.1),
+                        target_rotation: 0.0,
+                        smoothing: 20.0,
+                    },
+                ))
+                .with_children(|parent| {
+                    parent.spawn(SpriteBundle {
+                        texture: asset_server.load("ball.png"),
+                        sprite: Sprite {
+                            custom_size: Some(Vec2::splat(config.ball_radius * 2.0)),
+                            ..default()
+                        },
+                        transform: Transform::from_xyz(0.0, 0.0, 1.0),
+                        ..default()
+                    });
+                });
         }
 
         // Actualizar Jugadores
         for ps in players {
             let mut found = false;
-            for (mut interp, mut transform, rp) in players_q.iter_mut() {
+            for (mut interp, mut transform, mut rp) in players_q.iter_mut() {
                 if rp.id == ps.id {
                     interp.target_position = ps.position;
                     interp.target_velocity = Vec2::new(ps.velocity.0, ps.velocity.1);
+                    interp.target_rotation = ps.rotation;
                     transform.translation.x = ps.position.x;
                     transform.translation.y = ps.position.y;
+                    rp.kick_charge = ps.kick_charge;
                     found = true;
                     break;
                 }
             }
             if !found && !spawned_this_frame.contains(&ps.id) {
                 spawned_this_frame.insert(ps.id);
-                println!("🆕 [Bevy] Spawneando jugador visual: {} (ID: {})", ps.name, ps.id);
-                commands.spawn((
-                    SpriteBundle {
-                        sprite: Sprite {
-                            color: if my_id.0 == Some(ps.id) { Color::srgb(0.2, 0.4, 1.0) } else { Color::srgb(1.0, 0.3, 0.3) },
-                            custom_size: Some(Vec2::splat(45.0)),
+                println!(
+                    "🆕 [Bevy] Spawneando jugador visual: {} (ID: {})",
+                    ps.name, ps.id
+                );
+
+                // Color igual que RustBall: Keyboard = Azul
+                let player_color = if my_id.0 == Some(ps.id) {
+                    Color::srgb(0.3, 0.5, 0.9) // Azul RustBall (Keyboard)
+                } else {
+                    Color::srgb(0.9, 0.3, 0.3) // Rojo RustBall (otros)
+                };
+
+                // Igual que RustBall: usar textura con children
+                commands
+                    .spawn((
+                        SpatialBundle {
+                            transform: Transform::from_xyz(ps.position.x, ps.position.y, 0.0),
                             ..default()
                         },
-                        transform: Transform::from_xyz(ps.position.x, ps.position.y, 2.0),
-                        ..default()
-                    },
-                    RemotePlayer { id: ps.id, name: ps.name.clone() },
-                    Interpolated {
-                        target_position: ps.position,
-                        target_velocity: Vec2::new(ps.velocity.0, ps.velocity.1),
-                        smoothing: 15.0,
-                    },
-                ));
+                        RemotePlayer {
+                            id: ps.id,
+                            kick_charge: ps.kick_charge,
+                        },
+                        Interpolated {
+                            target_position: ps.position,
+                            target_velocity: Vec2::new(ps.velocity.0, ps.velocity.1),
+                            target_rotation: ps.rotation,
+                            smoothing: 15.0,
+                        },
+                    ))
+                    .with_children(|parent| {
+                        // Sprite del jugador
+                        parent.spawn(SpriteBundle {
+                            texture: asset_server.load("player.png"),
+                            sprite: Sprite {
+                                color: player_color,
+                                custom_size: Some(Vec2::splat(config.sphere_radius * 2.0)),
+                                ..default()
+                            },
+                            transform: Transform::from_xyz(0.0, 0.0, 1.0),
+                            ..default()
+                        });
+
+                        // Barra de carga de patada
+                        parent.spawn((
+                            KickChargeBar,
+                            SpriteBundle {
+                                sprite: Sprite {
+                                    color: Color::srgb(1.0, 0.0, 0.0),
+                                    custom_size: Some(Vec2::new(0.0, 5.0)),
+                                    anchor: bevy::sprite::Anchor::CenterLeft,
+                                    ..default()
+                                },
+                                transform: Transform::from_xyz(-25.0, 60.0, 30.0),
+                                ..default()
+                            },
+                        ));
+                    });
             }
         }
     }
@@ -451,12 +573,29 @@ fn process_network_messages(
 fn interpolate_entities(time: Res<Time>, mut q: Query<(&mut Transform, &Interpolated)>) {
     let dt = time.delta_seconds();
     for (mut transform, interp) in q.iter_mut() {
+        // Interpolar posición
         let prediction_offset = interp.target_velocity * dt;
         let effective_target = interp.target_position + prediction_offset;
         let current_pos = transform.translation.truncate();
         let new_pos = current_pos.lerp(effective_target, dt * interp.smoothing);
         transform.translation.x = new_pos.x;
         transform.translation.y = new_pos.y;
+
+        // Interpolar rotación
+        let (_, _, current_rotation) = transform.rotation.to_euler(EulerRot::XYZ);
+        let rotation_diff = interp.target_rotation - current_rotation;
+
+        // Normalizar el ángulo para tomar el camino más corto
+        let rotation_diff = if rotation_diff > std::f32::consts::PI {
+            rotation_diff - 2.0 * std::f32::consts::PI
+        } else if rotation_diff < -std::f32::consts::PI {
+            rotation_diff + 2.0 * std::f32::consts::PI
+        } else {
+            rotation_diff
+        };
+
+        let new_rotation = current_rotation + rotation_diff * (dt * interp.smoothing);
+        transform.rotation = Quat::from_rotation_z(new_rotation);
     }
 }
 
@@ -478,3 +617,21 @@ fn camera_follow_player(
     }
 }
 
+fn update_charge_bar(
+    player_query: Query<(&RemotePlayer, &Children)>,
+    mut bar_query: Query<&mut Sprite, With<KickChargeBar>>,
+) {
+    for (player, children) in player_query.iter() {
+        // Buscar la barra de carga entre los hijos
+        for &child in children.iter() {
+            if let Ok(mut sprite) = bar_query.get_mut(child) {
+                let max_width = 50.0;
+                // Solo mostramos la barra si hay carga, si no, la "escondemos" (ancho 0)
+                sprite.custom_size = Some(Vec2::new(max_width * player.kick_charge, 5.0));
+
+                // Opcional: Cambiar color de rojo a amarillo según la carga
+                sprite.color = Color::srgb(1.0, 1.0 - player.kick_charge, 0.0);
+            }
+        }
+    }
+}
