@@ -51,7 +51,10 @@ fn main() {
             FixedUpdate,
             (
                 process_network_messages,
+                detect_slide,
+                execute_slide,
                 move_players,
+                handle_collision_player,
                 look_at_ball,
                 charge_kick,
                 charge_curve,
@@ -142,6 +145,12 @@ struct Player {
     curve_charging: bool,
     tx: mpsc::Sender<ServerMessage>,
     pub is_ready: bool,
+
+    // Barrida/Slide
+    is_sliding: bool,
+    slide_timer: f32,
+    slide_direction: Vec2,
+    slide_cooldown: f32,
 }
 
 // Marker component para la entidad física del jugador (igual que RustBall)
@@ -403,6 +412,12 @@ async fn handle_client(
             }
         }
     }
+
+    // Notificar desconexión al sistema de juego
+    if let Some(id) = player_id {
+        let _ = event_tx.send(NetworkEvent::PlayerDisconnected { id }).await;
+        println!("🚪 Jugador {} desconectado", id);
+    }
 }
 
 // ============================================================================
@@ -421,6 +436,8 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         RigidBody::Dynamic,
         Collider::ball(config.ball_radius),
         Velocity::zero(),
+        CollisionGroups::new(Group::GROUP_3, Group::ALL),
+        SolverGroups::new(Group::GROUP_3, Group::ALL),
         AdditionalMassProperties::Mass(config.ball_mass),
         Friction {
             coefficient: config.ball_friction,
@@ -506,6 +523,7 @@ fn process_network_messages(
                         Collider::ball(config.sphere_radius),
                         Velocity::zero(),
                         CollisionGroups::new(Group::GROUP_4, Group::ALL),
+                        SolverGroups::new(Group::GROUP_4, Group::ALL),
                         Friction {
                             coefficient: config.sphere_friction,
                             combine_rule: CoefficientCombineRule::Average,
@@ -534,6 +552,10 @@ fn process_network_messages(
                     curve_charging: false,
                     tx,
                     is_ready: false,
+                    is_sliding: false,
+                    slide_timer: 0.0,
+                    slide_direction: Vec2::ZERO,
+                    slide_cooldown: 0.0,
                 });
 
                 println!("✅ Jugador {} spawneado: {}", id, name);
@@ -580,6 +602,11 @@ fn move_players(
     mut sphere_query: Query<&mut Velocity, With<Sphere>>,
 ) {
     for player in players.iter() {
+        // Si está en slide, no procesar input de movimiento
+        if player.is_sliding {
+            continue;
+        }
+
         let sphere_entity = player.sphere;
         let player_id = player.id;
 
@@ -616,7 +643,28 @@ fn move_players(
     }
 }
 
-// Sistema copiado de RustBall - charge_kick
+// Sistema de RustBall - permite atravesar la pelota con Sprint
+fn handle_collision_player(
+    game_input: Res<GameInputManager>,
+    player_query: Query<&Player>,
+    mut sphere_query: Query<&mut SolverGroups, With<Sphere>>,
+) {
+    for player in player_query.iter() {
+        let player_id = player.id;
+
+        if let Ok(mut solver_groups) = sphere_query.get_mut(player.sphere) {
+            if game_input.is_pressed(player_id, GameAction::StopInteract) {
+                // Con Sprint: no respuesta física con pelota (GROUP_3), sí con jugadores (GROUP_4) y paredes
+                solver_groups.filters = Group::ALL ^ Group::GROUP_3;
+            } else {
+                // Normal: respuesta física con todos
+                solver_groups.filters = Group::ALL;
+            }
+        }
+    }
+}
+
+// Sistema de carga de patada - ahora funciona con S, A o D
 fn charge_kick(
     game_input: Res<GameInputManager>,
     mut players: Query<&mut Player>,
@@ -624,24 +672,32 @@ fn charge_kick(
 ) {
     for mut player in players.iter_mut() {
         let player_id = player.id;
-        let kick_pressed = game_input.is_pressed(player_id, GameAction::Kick);
-        let kick_just_pressed = game_input.just_pressed(player_id, GameAction::Kick);
 
-        let should_start = kick_just_pressed && !player.kick_charging;
+        // Cualquiera de los 3 botones inicia la carga
+        let kick_pressed = game_input.is_pressed(player_id, GameAction::Kick);
+        let curve_left_pressed = game_input.is_pressed(player_id, GameAction::CurveLeft);
+        let curve_right_pressed = game_input.is_pressed(player_id, GameAction::CurveRight);
+
+        let any_kick_button = kick_pressed || curve_left_pressed || curve_right_pressed;
+        let just_pressed = game_input.just_pressed(player_id, GameAction::Kick)
+            || game_input.just_pressed(player_id, GameAction::CurveLeft)
+            || game_input.just_pressed(player_id, GameAction::CurveRight);
+
+        let should_start = just_pressed && !player.kick_charging;
 
         if should_start {
             player.kick_charging = true;
             player.kick_charge = 0.0;
         }
 
-        if kick_pressed && player.kick_charging {
+        if any_kick_button && player.kick_charging {
             player.kick_charge += 2.0 * time.delta_seconds();
             if player.kick_charge > 1.0 {
                 player.kick_charge = 1.0;
             }
         }
 
-        let should_release = !kick_pressed && player.kick_charging;
+        let should_release = !any_kick_button && player.kick_charging;
         if should_release {
             player.kick_charging = false;
         }
@@ -692,6 +748,11 @@ fn look_at_ball(
 ) {
     if let Ok(ball_transform) = ball_query.get_single() {
         for player in player_query.iter() {
+            // Durante slide, NO mirar la pelota - mantener rotación del deslizamiento
+            if player.is_sliding {
+                continue;
+            }
+
             if let Ok(mut sphere_transform) = sphere_query.get_mut(player.sphere) {
                 let direction =
                     (ball_transform.translation - sphere_transform.translation).truncate();
@@ -724,22 +785,21 @@ fn kick_ball(
     for mut player in player_query.iter_mut() {
         let player_id = player.id;
 
-        // Chequear si este jugador específico soltó el botón de pateo
-        let should_kick = game_input.just_released(player_id, GameAction::Kick);
+        // Chequear si este jugador soltó algún botón de patada
+        let kick_released = game_input.just_released(player_id, GameAction::Kick);
+        let curve_left_released = game_input.just_released(player_id, GameAction::CurveLeft);
+        let curve_right_released = game_input.just_released(player_id, GameAction::CurveRight);
+
+        let should_kick = kick_released || curve_left_released || curve_right_released;
 
         if should_kick && player.kick_charge > 0.0 {
-            // Chequear combas para este jugador
-            let curve_right = game_input.is_pressed(player_id, GameAction::CurveRight)
-                || game_input.just_released(player_id, GameAction::CurveRight);
-            let curve_left = game_input.is_pressed(player_id, GameAction::CurveLeft)
-                || game_input.just_released(player_id, GameAction::CurveLeft);
-
-            let auto_curve = if curve_right {
-                -1.0
-            } else if curve_left {
-                1.0
+            // Determinar curva según qué botón soltaste
+            let auto_curve = if curve_right_released {
+                -1.0 // D = curva derecha
+            } else if curve_left_released {
+                1.0 // A = curva izquierda
             } else {
-                0.0
+                0.0 // S = sin curva
             };
 
             if let Ok(player_transform) = sphere_query.get(player.sphere) {
@@ -754,11 +814,8 @@ fn kick_ball(
                             .truncate()
                             .normalize_or_zero();
 
-                        let final_curve = if auto_curve != 0.0 {
-                            auto_curve
-                        } else {
-                            player.curve_charge
-                        };
+                        // La curva es directamente auto_curve (según botón presionado)
+                        let final_curve = auto_curve;
 
                         // Inclinación física de 30 grados
                         let angle_rad = 30.0f32.to_radians();
@@ -842,7 +899,7 @@ fn attract_ball(
                     let distance = diff.truncate().length();
 
                     // Radio de "pegado" - cuando está muy cerca, la pelota se queda pegada
-                    let stick_radius = config.sphere_radius + 25.0;
+                    let stick_radius = config.sphere_radius + 30.0;
 
                     if distance < stick_radius && distance > 1.0 {
                         // Efecto pegado: frenar la pelota y atraerla suavemente
@@ -852,7 +909,7 @@ fn attract_ball(
                         velocity.linvel *= 0.85;
 
                         // Atracción suave hacia el jugador
-                        let stick_force = direction * 5000.0;
+                        let stick_force = direction * 8000.0;
                         impulse.impulse += stick_force;
                     } else if distance < config.attract_max_distance
                         && distance > config.attract_min_distance
@@ -886,6 +943,91 @@ fn attract_ball(
     }
 }
 
+// Sistema de barrida: lee comando de slide del cliente y valida/ejecuta
+fn detect_slide(
+    game_input: Res<GameInputManager>,
+    time: Res<Time>,
+    mut player_query: Query<&mut Player>,
+    sphere_query: Query<&Velocity, With<Sphere>>,
+) {
+    for mut player in player_query.iter_mut() {
+        let player_id = player.id;
+
+        // Reducir cooldown
+        if player.slide_cooldown > 0.0 {
+            player.slide_cooldown -= time.delta_seconds();
+        }
+
+        // Leer comando de slide desde el cliente
+        if game_input.just_pressed(player_id, GameAction::Slide) {
+            // Validar: cooldown, no está ya deslizando
+            if player.slide_cooldown <= 0.0 && !player.is_sliding {
+                // Obtener dirección actual del movimiento
+                if let Ok(velocity) = sphere_query.get(player.sphere) {
+                    let current_vel = velocity.linvel;
+
+                    // Solo permitir slide si se está moviendo
+                    if current_vel.length() > 50.0 {
+                        player.is_sliding = true;
+                        player.slide_timer = 0.5; // Duración de la barrida
+                        player.slide_direction = current_vel.normalize();
+                        player.slide_cooldown = 1.5; // 1.5 segundos de cooldown
+
+                        println!(
+                            "🏃 Jugador {} inicia barrida hacia {:?}",
+                            player_id, player.slide_direction
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Sistema de ejecución de barrida: aplica velocidad y cambia forma
+fn execute_slide(
+    config: Res<GameConfig>,
+    time: Res<Time>,
+    mut player_query: Query<&mut Player>,
+    mut sphere_query: Query<(&mut Velocity, &mut Collider, &mut Transform), With<Sphere>>,
+) {
+    for mut player in player_query.iter_mut() {
+        if player.is_sliding {
+            if let Ok((mut velocity, mut collider, mut transform)) =
+                sphere_query.get_mut(player.sphere)
+            {
+                // Aplicar velocidad fija en dirección del slide (doble de velocidad normal)
+                let slide_speed = config.player_speed * 2.0;
+                velocity.linvel = player.slide_direction * slide_speed;
+
+                // Cambiar forma a cápsula orientada en dirección del movimiento
+                // Calcular ángulo de la dirección (en radianes)
+                let angle = player.slide_direction.y.atan2(player.slide_direction.x)
+                    - std::f32::consts::FRAC_PI_2;
+
+                // Rotar el Transform para que la cápsula vertical apunte en la dirección correcta
+                transform.rotation = Quat::from_rotation_z(angle);
+
+                // Cápsula vertical (en espacio local) de 45 (radio) + 15 de extensión
+                let capsule_half_height = 15.0;
+                *collider = Collider::capsule_y(capsule_half_height, config.sphere_radius);
+
+                // Reducir timer
+                player.slide_timer -= time.delta_seconds();
+
+                // Si terminó la barrida
+                if player.slide_timer <= 0.0 {
+                    player.is_sliding = false;
+                    // Restaurar forma original (esfera) y rotación
+                    *collider = Collider::ball(config.sphere_radius);
+                    transform.rotation = Quat::IDENTITY;
+                    println!("🏁 Jugador {} termina barrida", player.id);
+                }
+            }
+        }
+    }
+}
+
 // Sistema de auto-toque: Da un pequeño toque a la pelota cuando está muy cerca y corriendo
 // Controles: haxball-mp (Sprint/StopInteract)
 // Física: RustBall (velocidad directa, validaciones, proximity_factor)
@@ -897,7 +1039,7 @@ fn auto_touch_ball(
     mut ball_query: Query<(&Transform, &mut Velocity), With<Ball>>,
 ) {
     // Radio de auto-toque (más pequeño que kick_distance_threshold)
-    let auto_touch_radius = config.sphere_radius + config.ball_radius + 30.0;
+    let auto_touch_radius = config.sphere_radius + config.ball_radius + 5.0;
     let touch_strength = 500.0;
 
     for player in player_query.iter() {
@@ -984,6 +1126,7 @@ fn broadcast_game_state(
                     kick_charging: player.kick_charging,
                     curve_charge: player.curve_charge,
                     curve_charging: player.curve_charging,
+                    is_sliding: player.is_sliding,
                 })
             } else {
                 None

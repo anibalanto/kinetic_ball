@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_rapier2d::prelude::*;
 use clap::Parser;
 use shared::protocol::{ClientMessage, GameConfig, NetworkInputType, PlayerInput, ServerMessage};
 use std::sync::{Arc, Mutex};
@@ -55,11 +56,13 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
         .insert_resource(GameConfig::default())
         .insert_resource(NetworkReceiver(Arc::new(Mutex::new(network_rx))))
         .insert_resource(InputSender(input_tx))
         .insert_resource(MyPlayerId(None))
         .insert_resource(PreviousInput::default())
+        .insert_resource(DoubleTapTracker { last_space_press: -999.0 })
         .add_systems(Startup, setup)
         // Lógica de red y entrada (frecuencia fija)
         .add_systems(
@@ -73,9 +76,10 @@ fn main() {
         .add_systems(
             Update,
             (
-                interpolate_entities, // Suaviza el movimiento entre posiciones de red
-                camera_follow_player, // La cámara debe seguir al jugador cada frame
-                update_charge_bar,    // Actualiza la barra de carga de patada
+                interpolate_entities,   // Suaviza el movimiento entre posiciones de red
+                camera_follow_player,   // La cámara debe seguir al jugador cada frame
+                update_charge_bar,      // Actualiza la barra de carga de patada
+                update_player_sprite,   // Cambia sprite según estado de slide
             ),
         )
         .run();
@@ -96,6 +100,11 @@ struct InputSender(mpsc::Sender<shared::protocol::ClientMessage>);
 #[derive(Resource)]
 struct MyPlayerId(Option<u32>);
 
+#[derive(Resource)]
+struct DoubleTapTracker {
+    last_space_press: f32,
+}
+
 // ============================================================================
 // COMPONENTES
 // ============================================================================
@@ -104,6 +113,7 @@ struct MyPlayerId(Option<u32>);
 struct RemotePlayer {
     id: u32,
     kick_charge: f32,
+    is_sliding: bool,
 }
 
 #[derive(Component)]
@@ -122,6 +132,12 @@ struct Interpolated {
 
 #[derive(Component)]
 struct KickChargeBar;
+
+#[derive(Component)]
+struct PlayerSprite {
+    parent_id: u32, // ID del jugador padre
+}
+
 // ============================================================================
 // NETWORK CLIENT (Tokio)
 // ============================================================================
@@ -375,9 +391,27 @@ fn handle_input(
     input_sender: Res<InputSender>,
     my_player_id: Res<MyPlayerId>,
     mut previous_input: ResMut<PreviousInput>,
+    mut double_tap: ResMut<DoubleTapTracker>,
+    time: Res<Time>,
 ) {
     if my_player_id.0.is_none() {
         return;
+    }
+
+    // Detectar doble tap de Space
+    let current_time = time.elapsed_seconds();
+    let double_tap_window = 0.3; // 300ms para doble tap
+    let mut slide_detected = false;
+
+    if keyboard.just_pressed(KeyCode::Space) {
+        let time_since_last = current_time - double_tap.last_space_press;
+
+        if time_since_last < double_tap_window {
+            slide_detected = true;
+            println!("🏃 [Cliente] Doble tap detectado! Enviando slide=true");
+        }
+
+        double_tap.last_space_press = current_time;
     }
 
     // Mapeo de teclas EXACTO de RustBall
@@ -391,6 +425,7 @@ fn handle_input(
         curve_right: keyboard.pressed(KeyCode::KeyD),
         stop_interact: keyboard.pressed(KeyCode::ShiftLeft),
         sprint: keyboard.pressed(KeyCode::Space),
+        slide: slide_detected,
     };
 
     if input != previous_input.0 {
@@ -417,7 +452,7 @@ fn process_network_messages(
     mut my_id: ResMut<MyPlayerId>,
     mut ball_q: Query<(&mut Interpolated, &mut Transform, &RemoteBall), Without<RemotePlayer>>,
     mut players_q: Query<
-        (&mut Interpolated, &mut Transform, &mut RemotePlayer),
+        (&mut Interpolated, &mut Transform, &mut RemotePlayer, &mut Collider),
         (Without<RemoteBall>, Without<MainCamera>),
     >,
 ) {
@@ -469,6 +504,7 @@ fn process_network_messages(
                         ..default()
                     },
                     RemoteBall,
+                    Collider::ball(config.ball_radius), // Para debug rendering
                     Interpolated {
                         target_position: Vec2::new(ball.position.0, ball.position.1),
                         target_velocity: Vec2::new(ball.velocity.0, ball.velocity.1),
@@ -492,7 +528,7 @@ fn process_network_messages(
         // Actualizar Jugadores
         for ps in players {
             let mut found = false;
-            for (mut interp, mut transform, mut rp) in players_q.iter_mut() {
+            for (mut interp, mut transform, mut rp, mut collider) in players_q.iter_mut() {
                 if rp.id == ps.id {
                     interp.target_position = ps.position;
                     interp.target_velocity = Vec2::new(ps.velocity.0, ps.velocity.1);
@@ -500,6 +536,18 @@ fn process_network_messages(
                     transform.translation.x = ps.position.x;
                     transform.translation.y = ps.position.y;
                     rp.kick_charge = ps.kick_charge;
+                    rp.is_sliding = ps.is_sliding;
+
+                    // Actualizar collider según estado de slide
+                    if ps.is_sliding {
+                        // Cápsula para slide (igual que servidor)
+                        *collider = Collider::capsule_y(15.0, config.sphere_radius);
+                        transform.rotation = Quat::from_rotation_z(ps.rotation);
+                    } else {
+                        // Esfera normal
+                        *collider = Collider::ball(config.sphere_radius);
+                    }
+
                     found = true;
                     break;
                 }
@@ -528,7 +576,9 @@ fn process_network_messages(
                         RemotePlayer {
                             id: ps.id,
                             kick_charge: ps.kick_charge,
+                            is_sliding: ps.is_sliding,
                         },
+                        Collider::ball(config.sphere_radius), // Para debug rendering
                         Interpolated {
                             target_position: ps.position,
                             target_velocity: Vec2::new(ps.velocity.0, ps.velocity.1),
@@ -538,16 +588,19 @@ fn process_network_messages(
                     ))
                     .with_children(|parent| {
                         // Sprite del jugador
-                        parent.spawn(SpriteBundle {
-                            texture: asset_server.load("player.png"),
-                            sprite: Sprite {
-                                color: player_color,
-                                custom_size: Some(Vec2::splat(config.sphere_radius * 2.0)),
+                        parent.spawn((
+                            SpriteBundle {
+                                texture: asset_server.load("player.png"),
+                                sprite: Sprite {
+                                    color: player_color,
+                                    custom_size: Some(Vec2::splat(config.sphere_radius * 2.0)),
+                                    ..default()
+                                },
+                                transform: Transform::from_xyz(0.0, 0.0, 1.0),
                                 ..default()
                             },
-                            transform: Transform::from_xyz(0.0, 0.0, 1.0),
-                            ..default()
-                        });
+                            PlayerSprite { parent_id: ps.id },
+                        ));
 
                         // Barra de carga de patada
                         parent.spawn((
@@ -631,6 +684,35 @@ fn update_charge_bar(
 
                 // Opcional: Cambiar color de rojo a amarillo según la carga
                 sprite.color = Color::srgb(1.0, 1.0 - player.kick_charge, 0.0);
+            }
+        }
+    }
+}
+
+fn update_player_sprite(
+    player_query: Query<&RemotePlayer>,
+    mut sprite_query: Query<(&PlayerSprite, &mut Handle<Image>, &mut Sprite)>,
+    asset_server: Res<AssetServer>,
+    config: Res<GameConfig>,
+) {
+    for (player_sprite, mut texture, mut sprite) in sprite_query.iter_mut() {
+        // Buscar el jugador correspondiente
+        for player in player_query.iter() {
+            if player.id == player_sprite.parent_id {
+                // Cambiar textura y tamaño según estado de slide
+                if player.is_sliding {
+                    *texture = asset_server.load("player_slide.png");
+                    // Tamaño vertical en espacio local (cuando el padre rota, se ve horizontal)
+                    sprite.custom_size = Some(Vec2::new(
+                        config.sphere_radius * 2.0,  // Ancho (un poco más ancho)
+                        config.sphere_radius * 2.5,  // Alto (más) - se convierte en largo cuando rota
+                    ));
+                } else {
+                    *texture = asset_server.load("player.png");
+                    // Tamaño cuadrado normal
+                    sprite.custom_size = Some(Vec2::splat(config.sphere_radius * 2.0));
+                }
+                break;
             }
         }
     }

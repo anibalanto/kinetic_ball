@@ -12,7 +12,7 @@ shared = { path = "../shared", features = ["bevy"] }
 
 # Bevy (con rendering completo)
 bevy = { workspace = true }
-bevy_rapier2d = { workspace = true }
+bevy_rapier2d = { workspace = true, features = ["debug-render-2d"] }
 
 # Networking
 tokio = { workspace = true }

@@ -29,6 +29,7 @@ pub struct PlayerInput {
     pub curve_right: bool,
     pub stop_interact: bool,
     pub sprint: bool,
+    pub slide: bool,
 }
 
 /// Mensajes que el servidor envía al cliente
@@ -72,6 +73,7 @@ pub struct PlayerState {
     pub kick_charging: bool,
     pub curve_charge: f32,
     pub curve_charging: bool,
+    pub is_sliding: bool,
 }
 
 /// Estado de la pelota
