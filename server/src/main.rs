@@ -672,7 +672,10 @@ fn handle_collision_player(
 // Sistema de carga de patada - ahora funciona con S, A o D
 fn charge_kick(
     game_input: Res<GameInputManager>,
+    config: Res<GameConfig>,
     mut players: Query<&mut Player>,
+    mut ball_query: Query<(&Transform, &mut ExternalImpulse, &mut Ball)>,
+    sphere_query: Query<&Transform, With<Sphere>>,
     time: Res<Time>,
 ) {
     for mut player in players.iter_mut() {
@@ -688,23 +691,36 @@ fn charge_kick(
             || game_input.just_pressed(player_id, GameAction::CurveLeft)
             || game_input.just_pressed(player_id, GameAction::CurveRight);
 
-        let should_start = just_pressed && !player.kick_charging;
+        if let Ok(player_transform) = sphere_query.get(player.sphere) {
+            for (ball_transform, mut impulse, mut ball) in ball_query.iter_mut() {
+                let distance = player_transform
+                    .translation
+                    .distance(ball_transform.translation);
 
-        if should_start {
-            player.kick_charging = true;
-            player.kick_charge = 0.0;
-        }
+                if distance > config.kick_distance_threshold * 1.4 {
+                    player.kick_charging = false;
+                    player.kick_charge = 0.0;
+                } else {
+                    let should_start = just_pressed && !player.kick_charging;
 
-        if any_kick_button && player.kick_charging {
-            player.kick_charge += 2.0 * time.delta_seconds();
-            if player.kick_charge > 1.0 {
-                player.kick_charge = 1.0;
+                    if should_start {
+                        player.kick_charging = true;
+                        player.kick_charge = 0.0;
+                    }
+
+                    if any_kick_button && player.kick_charging {
+                        player.kick_charge += 2.0 * time.delta_seconds();
+                        if player.kick_charge > 1.0 {
+                            player.kick_charge = 1.0;
+                        }
+                    }
+
+                    let should_release = !any_kick_button && player.kick_charging;
+                    if should_release {
+                        player.kick_charging = false;
+                    }
+                }
             }
-        }
-
-        let should_release = !any_kick_button && player.kick_charging;
-        if should_release {
-            player.kick_charging = false;
         }
     }
 }
@@ -741,40 +757,6 @@ fn charge_curve(
             player.curve_charge *= 0.75;
         } else if player.curve_charge.abs() > 0.0 {
             player.curve_charge = 0.0;
-        }
-    }
-}
-
-fn look_at_ball(
-    game_input: Res<GameInputManager>,
-    player_query: Query<&Player>,
-    mut sphere_query: Query<&mut Transform, With<Sphere>>,
-    ball_query: Query<&Transform, (With<Ball>, Without<Sphere>)>,
-) {
-    if let Ok(ball_transform) = ball_query.get_single() {
-        for player in player_query.iter() {
-            // Durante slide, NO mirar la pelota - mantener rotación del deslizamiento
-            if player.is_sliding {
-                continue;
-            }
-
-            if let Ok(mut sphere_transform) = sphere_query.get_mut(player.sphere) {
-                let direction =
-                    (ball_transform.translation - sphere_transform.translation).truncate();
-
-                if direction.length() > 0.0 {
-                    let mut angle = direction.y.atan2(direction.x);
-                    let tilt_rad = 30.0f32.to_radians();
-
-                    /*if game_input.is_pressed(player.id, GameAction::CurveRight) {
-                        angle += tilt_rad;
-                    } else if game_input.is_pressed(player.id, GameAction::CurveLeft) {
-                        angle -= tilt_rad;
-                    }*/
-
-                    sphere_transform.rotation = Quat::from_rotation_z(angle);
-                }
-            }
         }
     }
 }
@@ -852,6 +834,40 @@ fn kick_ball(
                 }
             }
             player.kick_charge = 0.0;
+        }
+    }
+}
+
+fn look_at_ball(
+    game_input: Res<GameInputManager>,
+    player_query: Query<&Player>,
+    mut sphere_query: Query<&mut Transform, With<Sphere>>,
+    ball_query: Query<&Transform, (With<Ball>, Without<Sphere>)>,
+) {
+    if let Ok(ball_transform) = ball_query.get_single() {
+        for player in player_query.iter() {
+            // Durante slide, NO mirar la pelota - mantener rotación del deslizamiento
+            if player.is_sliding {
+                continue;
+            }
+
+            if let Ok(mut sphere_transform) = sphere_query.get_mut(player.sphere) {
+                let direction =
+                    (ball_transform.translation - sphere_transform.translation).truncate();
+
+                if direction.length() > 0.0 {
+                    let mut angle = direction.y.atan2(direction.x);
+                    let tilt_rad = 30.0f32.to_radians();
+
+                    /*if game_input.is_pressed(player.id, GameAction::CurveRight) {
+                        angle += tilt_rad;
+                    } else if game_input.is_pressed(player.id, GameAction::CurveLeft) {
+                        angle -= tilt_rad;
+                    }*/
+
+                    sphere_transform.rotation = Quat::from_rotation_z(angle);
+                }
+            }
         }
     }
 }
@@ -1047,7 +1063,7 @@ fn auto_touch_ball(
 ) {
     // Radio de auto-toque (más pequeño que kick_distance_threshold)
     let auto_touch_radius = config.sphere_radius + config.ball_radius + 5.0;
-    let touch_strength = 500.0;
+    let touch_strength = 400.0;
 
     for player in player_query.iter() {
         let player_id = player.id;
