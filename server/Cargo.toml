@@ -27,3 +27,4 @@ bytes = { workspace = true }
 
 # Utilidades
 anyhow = { workspace = true }
+json5 = "0.4"

@@ -8,6 +8,8 @@ use tokio::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 mod input;
+mod map;
+
 use input::{GameAction, InputSource, NetworkInputSource};
 
 fn main() {
@@ -456,10 +458,38 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         ExternalForce::default(),
     ));
 
-    // Crear paredes
+    // Intentar cargar mapa
+    let map_loaded = if let Some(map_path) = &config.map_path {
+        match map::load_map(map_path) {
+            Ok(haxball_map) => {
+                let converter = map::MapConverter::new();
+                converter.spawn_map_geometry(&mut commands, &haxball_map, config.wall_restitution);
+                true
+            }
+            Err(e) => {
+                eprintln!("⚠️  Failed to load map: {}", e);
+                eprintln!("   Falling back to default walls");
+                false
+            }
+        }
+    } else {
+        false
+    };
+
+    // Fallback: crear paredes por defecto si no hay mapa o falló la carga
+    if !map_loaded || config.use_default_walls {
+        spawn_default_walls(&mut commands, &config);
+    }
+
+    println!("✅ Juego configurado");
+}
+
+// Función auxiliar: spawner paredes por defecto
+fn spawn_default_walls(commands: &mut Commands, config: &GameConfig) {
     let wall_thickness = 10.0;
     let wall_collision = CollisionGroups::new(Group::GROUP_1, Group::ALL);
 
+    // Pared superior
     commands.spawn((
         RigidBody::Fixed,
         Collider::cuboid(config.arena_width / 2.0, wall_thickness),
@@ -469,6 +499,7 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         GlobalTransform::default(),
     ));
 
+    // Pared inferior
     commands.spawn((
         RigidBody::Fixed,
         Collider::cuboid(config.arena_width / 2.0, wall_thickness),
@@ -478,6 +509,7 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         GlobalTransform::default(),
     ));
 
+    // Pared izquierda
     commands.spawn((
         RigidBody::Fixed,
         Collider::cuboid(wall_thickness, config.arena_height / 2.0),
@@ -487,6 +519,7 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         GlobalTransform::default(),
     ));
 
+    // Pared derecha
     commands.spawn((
         RigidBody::Fixed,
         Collider::cuboid(wall_thickness, config.arena_height / 2.0),
@@ -496,7 +529,7 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         GlobalTransform::default(),
     ));
 
-    println!("✅ Juego configurado");
+    println!("✅ Default walls spawned");
 }
 
 fn process_network_messages(

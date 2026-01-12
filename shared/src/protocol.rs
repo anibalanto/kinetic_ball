@@ -131,6 +131,17 @@ pub struct GameConfig {
     pub arena_width: f32,
     pub arena_height: f32,
     pub wall_restitution: f32,
+
+    // Map loading
+    #[serde(default)]
+    pub map_path: Option<String>,
+
+    #[serde(default = "default_true")]
+    pub use_default_walls: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for GameConfig {
@@ -170,6 +181,10 @@ impl Default for GameConfig {
             arena_width: 2000.0,
             arena_height: 1500.0,
             wall_restitution: 0.8,
+
+            // Map loading
+            map_path: None,
+            use_default_walls: true,
         }
     }
 }
