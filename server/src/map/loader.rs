@@ -1,5 +1,6 @@
 use shared::map::Map;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::fs;
 
 #[derive(Debug)]
 pub enum MapLoadError {
@@ -71,4 +72,25 @@ fn validate_map(map: &Map) -> Result<(), MapLoadError> {
     }
 
     Ok(())
+}
+
+/// Listar todos los mapas disponibles en el directorio
+pub fn list_available_maps(maps_dir: &str) -> Vec<PathBuf> {
+    let mut maps = Vec::new();
+
+    if let Ok(entries) = fs::read_dir(maps_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    if ext == "hbs" || ext == "json" || ext == "json5" {
+                        maps.push(path);
+                    }
+                }
+            }
+        }
+    }
+
+    maps.sort();
+    maps
 }

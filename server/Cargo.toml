@@ -27,4 +27,6 @@ bytes = { workspace = true }
 
 # Utilidades
 anyhow = { workspace = true }
+clap = { workspace = true }
 json5 = "0.4"
+serde_json = "1.0"

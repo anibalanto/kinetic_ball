@@ -28,6 +28,12 @@ impl MapConverter {
 
         // Spawnear segmentos (paredes)
         for (i, segment) in map.segments.iter().enumerate() {
+            // Skip segmentos invisibles - no tienen física, solo son decorativos
+            if !segment.is_visible() {
+                println!("  ⊘ Segment {} (invisible): skipping physics", i);
+                continue;
+            }
+
             if let Some(collider) = self.segment_to_collider(segment, &map.vertexes) {
                 let collision_groups = self.compute_collision_groups(
                     segment.c_mask.as_ref(),
@@ -100,51 +106,65 @@ impl MapConverter {
                 .map(|p| [p.x, p.y].into())
                 .collect();
 
-            Collider::polyline(rapier_points, None)
+            Some(Collider::polyline(rapier_points, None))
         }
     }
 
-    /// Aproximar segmento curvo con polyline
+    /// Aproximar segmento curvo con polyline (HaxBall curve format)
     fn approximate_curve(&self, p0: Vec2, p1: Vec2, curve: f32) -> Vec<Vec2> {
         let num_segments = self.curve_config.segments_per_curve;
         let mut points = Vec::with_capacity(num_segments + 1);
 
-        // En HaxBall:
-        // - curve > 0: curva hacia la derecha
-        // - curve < 0: curva hacia la izquierda
-        // - |curve| = radio de curvatura del arco
-
-        let dir = (p1 - p0).normalize();
-        let length = p0.distance(p1);
-
-        // Vector perpendicular (apunta hacia donde se curva)
-        let perp = Vec2::new(-dir.y, dir.x);
-
-        // Radio del arco
+        let chord = p0.distance(p1);
         let radius = curve.abs();
 
-        // Ángulo del arco
-        let arc_angle = length / radius;
+        // Si el radio es muy pequeño o inválido, retornar línea recta
+        if radius < chord / 2.0 {
+            points.push(p0);
+            points.push(p1);
+            return points;
+        }
 
-        // Centro del círculo
-        let center = (p0 + p1) * 0.5 + perp * curve;
+        // Calcular el ángulo subtendido por la cuerda
+        let half_angle = (chord / (2.0 * radius)).asin();
+        let total_angle = 2.0 * half_angle;
 
-        // Generar puntos a lo largo del arco
+        // Punto medio de la cuerda
+        let midpoint = (p0 + p1) * 0.5;
+
+        // Vector de p0 a p1
+        let chord_vec = p1 - p0;
+
+        // Vector perpendicular (normalizado)
+        let perp = Vec2::new(-chord_vec.y, chord_vec.x).normalize();
+
+        // Distancia del centro a la cuerda
+        let height = (radius * radius - (chord / 2.0) * (chord / 2.0)).sqrt();
+
+        // Centro del círculo (curva positiva = perp positivo, negativa = perp negativo)
+        let center = if curve > 0.0 {
+            midpoint + perp * height
+        } else {
+            midpoint - perp * height
+        };
+
+        // Ángulo inicial (de center a p0)
+        let start_angle = (p0.y - center.y).atan2(p0.x - center.x);
+
+        // Determinar dirección de barrido
+        let angle_step = if curve > 0.0 {
+            -total_angle / num_segments as f32
+        } else {
+            total_angle / num_segments as f32
+        };
+
+        // Generar puntos
         for i in 0..=num_segments {
-            let t = i as f32 / num_segments as f32;
-            let angle = -arc_angle * 0.5 + arc_angle * t;
-
-            let offset_angle = if curve > 0.0 {
-                dir.y.atan2(dir.x) + std::f32::consts::FRAC_PI_2
-            } else {
-                dir.y.atan2(dir.x) - std::f32::consts::FRAC_PI_2
-            };
-
-            let point = center + Vec2::new(
-                radius * (offset_angle + angle).cos(),
-                radius * (offset_angle + angle).sin(),
+            let angle = start_angle + angle_step * i as f32;
+            let point = Vec2::new(
+                center.x + radius * angle.cos(),
+                center.y + radius * angle.sin(),
             );
-
             points.push(point);
         }
 
@@ -157,17 +177,30 @@ impl MapConverter {
         cmask: Option<&Vec<String>>,
         cgroup: Option<&Vec<String>>,
     ) -> CollisionGroups {
-        // Por defecto: comportamiento tipo pared (GROUP_1, colisiona con todos)
+        // Por defecto: sin colisión (líneas decorativas)
         let mut memberships = Group::GROUP_1;
-        let mut filters = Group::ALL;
+        let mut filters = Group::NONE;
 
-        // Parsear grupos de colisión de HaxBall
-        if let Some(groups) = cgroup {
-            memberships = self.parse_group_membership(groups);
-        }
-
+        // Parsear cMask primero para determinar memberships especiales
         if let Some(masks) = cmask {
             filters = self.parse_group_filters(masks);
+
+            // Usar memberships especiales según cMask
+            if masks.iter().any(|m| m == "ball") && !masks.iter().any(|m| m == "red" || m == "blue") {
+                // Solo pelota: usar GROUP_5
+                memberships = Group::GROUP_5;
+            } else if masks.iter().any(|m| m == "red" || m == "blue") && !masks.iter().any(|m| m == "ball") {
+                // Solo jugadores: usar GROUP_6
+                memberships = Group::GROUP_6;
+            }
+        }
+
+        // Si tiene cGroup explícito, usarlo (override)
+        if let Some(groups) = cgroup {
+            let parsed = self.parse_group_membership(groups);
+            if parsed != Group::NONE {
+                memberships = parsed;
+            }
         }
 
         CollisionGroups::new(memberships, filters)
@@ -207,10 +240,8 @@ impl MapConverter {
             }
         }
 
-        if result == Group::NONE {
-            result = Group::ALL; // Por defecto: colisiona con todo
-        }
-
+        // Si cMask está vacío o no definido, NO colisionar con nada
+        // Solo las líneas con cMask explícito deberían tener física
         result
     }
 }

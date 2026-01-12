@@ -1,5 +1,6 @@
 use bevy::prelude::{Component, Vec2};
 use serde::{Deserialize, Serialize};
+use crate::map::Map;
 
 /// Mensajes que el cliente envía al servidor
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +47,7 @@ pub enum ServerMessage {
     Welcome {
         player_id: u32,
         game_config: GameConfig,
+        map: Option<Map>,
     },
 
     GameState {

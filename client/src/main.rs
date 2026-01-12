@@ -11,8 +11,8 @@ use tokio::sync::mpsc;
 #[command(name = "Haxball Client")]
 #[command(about = "Cliente del juego Haxball", long_about = None)]
 struct Args {
-    /// Dirección del servidor (ej: localhost:9000 o 192.168.0.79:9000)
-    #[arg(short, long, default_value = "localhost:9000")]
+    /// Dirección del servidor (ej: localhost:9999 o 192.168.0.79:9999)
+    #[arg(short, long, default_value = "localhost:9999")]
     server: String,
 
     /// Nombre del jugador
@@ -48,6 +48,7 @@ fn main() {
     println!("🎨 [Bevy] Intentando abrir ventana...");
     App::new()
         .insert_resource(bevy::winit::WinitSettings::game())
+        .insert_resource(ClearColor(Color::srgb(0.2, 0.5, 0.2))) // Fondo verde para evitar el gris
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: format!("Haxball - {}", args.name),
@@ -61,6 +62,7 @@ fn main() {
         .insert_resource(NetworkReceiver(Arc::new(Mutex::new(network_rx))))
         .insert_resource(InputSender(input_tx))
         .insert_resource(MyPlayerId(None))
+        .insert_resource(LoadedMap::default())
         .insert_resource(PreviousInput::default())
         .insert_resource(DoubleTapTracker {
             last_space_press: -999.0,
@@ -78,8 +80,11 @@ fn main() {
         .add_systems(
             Update,
             (
+                adjust_field_for_map, // Ajusta campo y oculta líneas si hay mapa
+                render_map,           // Dibuja el mapa cargado del servidor
                 interpolate_entities, // Suaviza el movimiento entre posiciones de red
                 camera_follow_player, // La cámara debe seguir al jugador cada frame
+                camera_zoom_control,  // Control de zoom con teclas numéricas
                 update_charge_bar,    // Actualiza la barra de carga de patada
                 update_player_sprite, // Cambia sprite según estado de slide
             ),
@@ -106,6 +111,15 @@ struct MyPlayerId(Option<u32>);
 struct DoubleTapTracker {
     last_space_press: f32,
 }
+
+#[derive(Resource, Default)]
+struct LoadedMap(Option<shared::map::Map>);
+
+#[derive(Component)]
+struct DefaultFieldLine;
+
+#[derive(Component)]
+struct FieldBackground;
 
 // ============================================================================
 // COMPONENTES
@@ -199,6 +213,7 @@ async fn start_network_client(
         Ok(ServerMessage::Welcome {
             player_id,
             game_config,
+            map,
         }) => {
             println!("🎉 [Red] WELCOME recibido! Player ID: {}", player_id);
             // Enviar el Welcome a Bevy
@@ -206,6 +221,7 @@ async fn start_network_client(
                 .send(ServerMessage::Welcome {
                     player_id,
                     game_config,
+                    map,
                 })
                 .await;
         }
@@ -307,11 +323,11 @@ async fn enviar_input_packet(
 // ============================================================================
 
 fn setup(mut commands: Commands, config: Res<GameConfig>, input_sender: Res<InputSender>) {
-    // Cámara (igual que RustBall: scale 2.0)
+    // Cámara con zoom ajustado para mejor visualización del mapa
     commands.spawn((
         Camera2dBundle {
             projection: bevy::render::camera::OrthographicProjection {
-                scale: 2.0,
+                scale: 1.3, // Reducido de 2.0 para ver el campo más grande
                 ..default()
             },
             transform: Transform::from_xyz(0.0, 0.0, 999.0),
@@ -321,15 +337,18 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, input_sender: Res<Inpu
     ));
 
     // El Campo de Juego (Césped) - Color verde de RustBall
-    commands.spawn(SpriteBundle {
-        sprite: Sprite {
-            color: Color::srgb(0.2, 0.5, 0.2), // RGB(51, 127, 51) - Verde RustBall
-            custom_size: Some(Vec2::new(config.arena_width, config.arena_height)),
+    commands.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                color: Color::srgb(0.2, 0.5, 0.2), // RGB(51, 127, 51) - Verde RustBall
+                custom_size: Some(Vec2::new(config.arena_width, config.arena_height)),
+                ..default()
+            },
+            transform: Transform::from_xyz(0.0, 0.0, -10.0),
             ..default()
         },
-        transform: Transform::from_xyz(0.0, 0.0, -10.0),
-        ..default()
-    });
+        FieldBackground,
+    ));
 
     // Líneas blancas del campo (bordes) - igual que RustBall (z = 0.0)
     let thickness = 5.0;
@@ -337,48 +356,60 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, input_sender: Res<Inpu
     let h = config.arena_height;
 
     // Top
-    commands.spawn(SpriteBundle {
-        sprite: Sprite {
-            color: Color::WHITE,
-            custom_size: Some(Vec2::new(w + thickness, thickness)),
+    commands.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                color: Color::WHITE,
+                custom_size: Some(Vec2::new(w + thickness, thickness)),
+                ..default()
+            },
+            transform: Transform::from_xyz(0.0, h / 2.0, 0.0),
             ..default()
         },
-        transform: Transform::from_xyz(0.0, h / 2.0, 0.0),
-        ..default()
-    });
+        DefaultFieldLine,
+    ));
 
     // Bottom
-    commands.spawn(SpriteBundle {
-        sprite: Sprite {
-            color: Color::WHITE,
-            custom_size: Some(Vec2::new(w + thickness, thickness)),
+    commands.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                color: Color::WHITE,
+                custom_size: Some(Vec2::new(w + thickness, thickness)),
+                ..default()
+            },
+            transform: Transform::from_xyz(0.0, -h / 2.0, 0.0),
             ..default()
         },
-        transform: Transform::from_xyz(0.0, -h / 2.0, 0.0),
-        ..default()
-    });
+        DefaultFieldLine,
+    ));
 
     // Left
-    commands.spawn(SpriteBundle {
-        sprite: Sprite {
-            color: Color::WHITE,
-            custom_size: Some(Vec2::new(thickness, h + thickness)),
+    commands.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                color: Color::WHITE,
+                custom_size: Some(Vec2::new(thickness, h + thickness)),
+                ..default()
+            },
+            transform: Transform::from_xyz(-w / 2.0, 0.0, 0.0),
             ..default()
         },
-        transform: Transform::from_xyz(-w / 2.0, 0.0, 0.0),
-        ..default()
-    });
+        DefaultFieldLine,
+    ));
 
     // Right
-    commands.spawn(SpriteBundle {
-        sprite: Sprite {
-            color: Color::WHITE,
-            custom_size: Some(Vec2::new(thickness, h + thickness)),
+    commands.spawn((
+        SpriteBundle {
+            sprite: Sprite {
+                color: Color::WHITE,
+                custom_size: Some(Vec2::new(thickness, h + thickness)),
+                ..default()
+            },
+            transform: Transform::from_xyz(w / 2.0, 0.0, 0.0),
             ..default()
         },
-        transform: Transform::from_xyz(w / 2.0, 0.0, 0.0),
-        ..default()
-    });
+        DefaultFieldLine,
+    ));
 
     if let Err(e) = input_sender
         .0
@@ -460,6 +491,7 @@ fn process_network_messages(
     config: Res<GameConfig>,
     network_rx: Res<NetworkReceiver>,
     mut my_id: ResMut<MyPlayerId>,
+    mut loaded_map: ResMut<LoadedMap>,
     mut ball_q: Query<(&mut Interpolated, &mut Transform, &RemoteBall), Without<RemotePlayer>>,
     mut players_q: Query<
         (
@@ -487,11 +519,47 @@ fn process_network_messages(
 
     for msg in messages {
         match msg {
-            ServerMessage::Welcome { player_id, .. } => {
+            ServerMessage::Welcome {
+                player_id,
+                game_config,
+                map,
+            } => {
                 println!("🎉 [Bevy] Welcome recibido. Mi PlayerID es: {}", player_id);
                 my_id.0 = Some(player_id);
+
+                // Almacenar mapa si fue enviado
+                if let Some(received_map) = map {
+                    println!("📦 [Bevy] Mapa recibido: {}", received_map.name);
+                    println!(
+                        "   Dimensiones: width={:?}, height={:?}",
+                        received_map.width, received_map.height
+                    );
+                    println!(
+                        "   BG: width={:?}, height={:?}",
+                        received_map.bg.width, received_map.bg.height
+                    );
+                    println!(
+                        "   Vértices: {}, Segmentos: {}, Discos: {}",
+                        received_map.vertexes.len(),
+                        received_map.segments.len(),
+                        received_map.discs.len()
+                    );
+                    loaded_map.0 = Some(received_map);
+                } else {
+                    println!("🏟️  [Bevy] Usando arena por defecto");
+                }
             }
-            ServerMessage::GameState { players, ball, .. } => {
+            ServerMessage::GameState {
+                players,
+                ball,
+                tick,
+                ..
+            } => {
+                // Log solo el primer GameState recibido
+                if tick == 1 {
+                    println!("📥 [Bevy] Primer GameState recibido: {} jugadores, pelota en ({:.0}, {:.0})",
+                        players.len(), ball.position.0, ball.position.1);
+                }
                 last_game_state = Some((players, ball));
             }
             _ => {}
@@ -729,6 +797,42 @@ fn camera_follow_player(
     }
 }
 
+// Sistema de control de zoom con teclas numéricas
+fn camera_zoom_control(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut camera: Query<&mut bevy::render::camera::OrthographicProjection, With<MainCamera>>,
+) {
+    if let Ok(mut projection) = camera.get_single_mut() {
+        let mut new_scale = None;
+
+        // Teclas 1-9 para diferentes niveles de zoom
+        if keyboard.just_pressed(KeyCode::Digit1) {
+            new_scale = Some(0.5); // Muy cerca
+        } else if keyboard.just_pressed(KeyCode::Digit2) {
+            new_scale = Some(0.75);
+        } else if keyboard.just_pressed(KeyCode::Digit3) {
+            new_scale = Some(1.0); // Normal
+        } else if keyboard.just_pressed(KeyCode::Digit4) {
+            new_scale = Some(1.3);
+        } else if keyboard.just_pressed(KeyCode::Digit5) {
+            new_scale = Some(1.5);
+        } else if keyboard.just_pressed(KeyCode::Digit6) {
+            new_scale = Some(2.0); // Lejos
+        } else if keyboard.just_pressed(KeyCode::Digit7) {
+            new_scale = Some(2.5);
+        } else if keyboard.just_pressed(KeyCode::Digit8) {
+            new_scale = Some(3.0);
+        } else if keyboard.just_pressed(KeyCode::Digit9) {
+            new_scale = Some(4.0); // Muy lejos
+        }
+
+        if let Some(scale) = new_scale {
+            projection.scale = scale;
+            println!("📷 Zoom ajustado a: {:.1}x", scale);
+        }
+    }
+}
+
 fn update_charge_bar(
     player_query: Query<(&RemotePlayer, &Children)>,
     previous_input: Res<PreviousInput>, // Usamos Res si no vas a modificar el input
@@ -809,4 +913,194 @@ fn update_player_sprite(
             sprite.color = player.base_color.with_alpha(alpha);
         }
     }
+}
+
+// Sistema para ocultar líneas por defecto y ajustar campo cuando hay mapa
+fn adjust_field_for_map(
+    loaded_map: Res<LoadedMap>,
+    mut default_lines: Query<&mut Visibility, With<DefaultFieldLine>>,
+    mut field_bg: Query<
+        (&mut Sprite, &mut Transform),
+        (With<FieldBackground>, Without<DefaultFieldLine>),
+    >,
+) {
+    if loaded_map.is_changed() {
+        if let Some(map) = &loaded_map.0 {
+            // Hay mapa: ocultar líneas por defecto
+            for mut visibility in default_lines.iter_mut() {
+                *visibility = Visibility::Hidden;
+            }
+
+            // Ajustar tamaño del campo según dimensiones del mapa
+            // Usar primero las dimensiones del nivel raíz, luego las del bg como fallback
+            let width = map.width.or(map.bg.width);
+            let height = map.height.or(map.bg.height);
+
+            if let (Some(w), Some(h)) = (width, height) {
+                if let Ok((mut sprite, _transform)) = field_bg.get_single_mut() {
+                    sprite.custom_size = Some(Vec2::new(w, h));
+                    println!("🎨 Campo ajustado a dimensiones del mapa: {}x{}", w, h);
+                }
+            } else {
+                println!("⚠️  Mapa sin dimensiones definidas, usando tamaño por defecto");
+            }
+        } else {
+            // No hay mapa: mostrar líneas por defecto
+            for mut visibility in default_lines.iter_mut() {
+                *visibility = Visibility::Visible;
+            }
+        }
+    }
+}
+
+// Sistema para renderizar el mapa usando Gizmos
+fn render_map(mut gizmos: Gizmos, loaded_map: Res<LoadedMap>) {
+    let Some(map) = &loaded_map.0 else {
+        return; // No hay mapa cargado
+    };
+
+    // Colores según tipo de interacción
+    let ball_color = Color::srgb(0.3, 0.7, 1.0); // Azul claro - solo pelota
+    let player_color = Color::srgb(0.3, 1.0, 0.5); // Verde claro - solo jugadores
+    let decorative_color = Color::srgb(0.5, 0.5, 0.5); // Gris - decorativo sin física
+    let vertex_color = Color::srgb(1.0, 0.2, 0.2); // Rojo para vértices
+    let disc_color = Color::srgb(0.7, 0.7, 0.7); // Gris para discos
+
+    // Dibujar vértices (puntos de interacción)
+    for (_i, vertex) in map.vertexes.iter().enumerate() {
+        let pos = Vec3::new(vertex.x, vertex.y, 6.0); // z=6 para que esté encima
+        gizmos.circle(pos, Dir3::Z, 3.0, vertex_color); // Radio pequeño 3.0
+    }
+
+    // Dibujar segmentos (paredes)
+    for segment in &map.segments {
+        // SKIP si el segmento es invisible (vis=false)
+        if !segment.is_visible() {
+            continue;
+        }
+
+        if segment.v0 >= map.vertexes.len() || segment.v1 >= map.vertexes.len() {
+            continue; // Saltar segmentos inválidos
+        }
+
+        let v0 = &map.vertexes[segment.v0];
+        let v1 = &map.vertexes[segment.v1];
+
+        let p0 = Vec3::new(v0.x, v0.y, 5.0); // z=5 para que esté encima del campo
+        let p1 = Vec3::new(v1.x, v1.y, 5.0);
+
+        // Determinar color según cMask (tipo de colisión)
+        let line_color = if let Some(cmask) = &segment.c_mask {
+            if cmask.is_empty() || cmask.iter().any(|m| m.is_empty()) {
+                decorative_color // Sin colisión
+            } else if cmask.iter().any(|m| m == "ball")
+                && !cmask.iter().any(|m| m == "red" || m == "blue")
+            {
+                ball_color // Solo pelota
+            } else if cmask.iter().any(|m| m == "red" || m == "blue") {
+                player_color // Solo jugadores
+            } else {
+                decorative_color // Otro caso sin interacción
+            }
+        } else {
+            decorative_color // Sin cMask = decorativo
+        };
+
+        // Verificar si el segmento es curvo
+        let curve_factor = segment.curve.or(segment.curve_f).unwrap_or(0.0);
+
+        if curve_factor.abs() < 0.01 {
+            // Segmento recto
+            gizmos.line(p0, p1, line_color);
+        } else {
+            // Segmento curvo - aproximar con más líneas para mejor visualización
+            let num_segments = 24; // Más segmentos para curvas más suaves
+            let points = approximate_curve_for_rendering(
+                Vec2::new(v0.x, v0.y),
+                Vec2::new(v1.x, v1.y),
+                curve_factor,
+                num_segments,
+            );
+
+            // Dibujar líneas conectadas
+            for i in 0..points.len() - 1 {
+                gizmos.line(
+                    Vec3::new(points[i].x, points[i].y, 5.0),
+                    Vec3::new(points[i + 1].x, points[i + 1].y, 5.0),
+                    line_color,
+                );
+            }
+        }
+    }
+
+    // Dibujar discos (obstáculos circulares)
+    for disc in &map.discs {
+        let pos = Vec3::new(disc.pos[0], disc.pos[1], 5.0);
+        gizmos.circle(pos, Dir3::Z, disc.radius, disc_color);
+    }
+}
+
+// Función auxiliar para aproximar curvas (HaxBall curve format)
+fn approximate_curve_for_rendering(
+    p0: Vec2,
+    p1: Vec2,
+    curve: f32,
+    num_segments: usize,
+) -> Vec<Vec2> {
+    let mut points = Vec::with_capacity(num_segments + 1);
+
+    let chord = p0.distance(p1);
+    let radius = curve.abs();
+
+    // Si el radio es muy pequeño o inválido, retornar línea recta
+    if radius < chord / 2.0 {
+        points.push(p0);
+        points.push(p1);
+        return points;
+    }
+
+    // Calcular el ángulo subtendido por la cuerda
+    let half_angle = (chord / (2.0 * radius)).asin();
+    let total_angle = 2.0 * half_angle;
+
+    // Punto medio de la cuerda
+    let midpoint = (p0 + p1) * 0.5;
+
+    // Vector de p0 a p1
+    let chord_vec = p1 - p0;
+
+    // Vector perpendicular (normalizado)
+    let perp = Vec2::new(-chord_vec.y, chord_vec.x).normalize();
+
+    // Distancia del centro a la cuerda
+    let height = (radius * radius - (chord / 2.0) * (chord / 2.0)).sqrt();
+
+    // Centro del círculo (curva positiva = perp positivo, negativa = perp negativo)
+    let center = if curve > 0.0 {
+        midpoint + perp * height
+    } else {
+        midpoint - perp * height
+    };
+
+    // Ángulo inicial (de center a p0)
+    let start_angle = (p0.y - center.y).atan2(p0.x - center.x);
+
+    // Determinar dirección de barrido
+    let angle_step = if curve > 0.0 {
+        -total_angle / num_segments as f32
+    } else {
+        total_angle / num_segments as f32
+    };
+
+    // Generar puntos
+    for i in 0..=num_segments {
+        let angle = start_angle + angle_step * i as f32;
+        let point = Vec2::new(
+            center.x + radius * angle.cos(),
+            center.y + radius * angle.sin(),
+        );
+        points.push(point);
+    }
+
+    points
 }

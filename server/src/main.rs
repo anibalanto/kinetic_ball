@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
+use clap::Parser;
 use shared::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -12,14 +13,95 @@ mod map;
 
 use input::{GameAction, InputSource, NetworkInputSource};
 
+/// HaxBall Server - Servidor de física para juego de fútbol
+#[derive(Parser, Debug)]
+#[command(name = "haxball-server")]
+#[command(about = "Servidor de física para HaxBall multiplayer", long_about = None)]
+struct Cli {
+    /// Ruta al archivo de mapa (.hbs, .json, .json5)
+    #[arg(short, long, value_name = "FILE")]
+    map: Option<String>,
+
+    /// Factor de escala para el mapa (ej: 2.0 = mapa 2x más grande)
+    #[arg(short, long, default_value = "1.0")]
+    scale: f32,
+
+    /// Listar mapas disponibles en el directorio maps/
+    #[arg(short, long)]
+    list_maps: bool,
+
+    /// Puerto del servidor
+    #[arg(short, long, default_value = "9000")]
+    port: u16,
+}
+
 fn main() {
+    let cli = Cli::parse();
+
+    // Si se solicita listar mapas, mostrar y salir
+    if cli.list_maps {
+        println!("📂 Mapas disponibles en maps/:\n");
+        let maps = map::list_available_maps("maps");
+        if maps.is_empty() {
+            println!("   (No se encontraron mapas)");
+        } else {
+            for (i, map_path) in maps.iter().enumerate() {
+                let name = map_path.file_name().unwrap().to_string_lossy();
+                println!("   {}. {}", i + 1, name);
+            }
+        }
+        println!("\nUso: cargo run --release --bin server -- --map maps/<nombre>");
+        return;
+    }
+
     println!("🎮 Haxball Server - Iniciando...");
 
-    let (network_tx, network_rx) = mpsc::channel(100);
-    let network_state = Arc::new(Mutex::new(NetworkState { next_player_id: 1 }));
+    // Configurar GameConfig con el mapa desde CLI
+    let (game_config, loaded_map) = if let Some(map_path) = cli.map {
+        println!("🗺️  Cargando mapa: {}", map_path);
 
+        // Intentar cargar el mapa
+        let loaded_map = match map::load_map(&map_path) {
+            Ok(mut m) => {
+                println!("   ✅ Mapa cargado: {}", m.name);
+
+                // Aplicar escala si es diferente de 1.0
+                if (cli.scale - 1.0).abs() > 0.01 {
+                    println!("   📏 Aplicando escala: {}x", cli.scale);
+                    m.scale(cli.scale);
+                }
+
+                Some(m)
+            }
+            Err(e) => {
+                eprintln!("   ⚠️  Error cargando mapa: {}", e);
+                eprintln!("   Continuando con arena por defecto");
+                None
+            }
+        };
+
+        let config = GameConfig {
+            map_path: Some(map_path),
+            use_default_walls: loaded_map.is_none(),
+            ..Default::default()
+        };
+
+        (config, loaded_map)
+    } else {
+        println!("🏟️  Usando arena por defecto");
+        (GameConfig::default(), None)
+    };
+
+    let (network_tx, network_rx) = mpsc::channel(100);
+    let network_state = Arc::new(Mutex::new(NetworkState {
+        next_player_id: 1,
+        game_config: game_config.clone(),
+        map: loaded_map,
+    }));
+
+    let port = cli.port;
     std::thread::spawn(move || {
-        start_network_server(network_tx, network_state);
+        start_network_server(network_tx, network_state, port);
     });
 
     App::new()
@@ -40,7 +122,7 @@ fn main() {
             force_update_from_transform_changes: false,
             scaled_shape_subdivision: 10,
         })
-        .insert_resource(GameConfig::default())
+        .insert_resource(game_config)
         .insert_resource(NetworkReceiver(network_rx))
         .insert_resource(GameTick(0))
         .insert_resource(BroadcastTimer(Timer::from_seconds(
@@ -171,6 +253,8 @@ struct Ball {
 
 struct NetworkState {
     next_player_id: u32,
+    game_config: GameConfig,
+    map: Option<shared::map::Map>,
 }
 
 enum NetworkEvent {
@@ -195,7 +279,7 @@ enum NetworkEvent {
 // NETWORK SERVER
 // ============================================================================
 
-fn start_network_server(event_tx: mpsc::Sender<NetworkEvent>, state: Arc<Mutex<NetworkState>>) {
+fn start_network_server(event_tx: mpsc::Sender<NetworkEvent>, state: Arc<Mutex<NetworkState>>, port: u16) {
     // Creamos un runtime de Tokio dedicado para la red
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -203,11 +287,12 @@ fn start_network_server(event_tx: mpsc::Sender<NetworkEvent>, state: Arc<Mutex<N
         .expect("No se pudo crear el runtime de Tokio");
 
     rt.block_on(async {
-        let listener = TcpListener::bind("0.0.0.0:9000")
+        let addr = format!("0.0.0.0:{}", port);
+        let listener = TcpListener::bind(&addr)
             .await
-            .expect("No se pudo enlazar el servidor al puerto 9000");
+            .unwrap_or_else(|_| panic!("No se pudo enlazar el servidor al puerto {}", port));
 
-        println!("🌐 Servidor escuchando en 0.0.0.0:9000");
+        println!("🌐 Servidor escuchando en {}", addr);
 
         loop {
             match listener.accept().await {
@@ -253,6 +338,14 @@ async fn handle_client(
     tokio::spawn(async move {
         let mut msg_count = 0;
         while let Some(msg) = rx.recv().await {
+            // Log para Welcome específicamente
+            if matches!(msg, ServerMessage::Welcome { .. }) {
+                println!(
+                    "📨 [Server->Socket] Enviando Welcome a {} por socket...",
+                    addr
+                );
+            }
+
             if let Ok(data) = bincode::serialize(&msg) {
                 msg_count += 1;
                 let len = data.len() as u32;
@@ -265,6 +358,15 @@ async fn handle_client(
                 if let Err(e) = write_half.write_all(&packet).await {
                     println!("❌ Error en socket para {}: {:?}", addr, e);
                     break;
+                }
+
+                // Log específico para Welcome
+                if matches!(msg, ServerMessage::Welcome { .. }) {
+                    println!(
+                        "✅ [Server->Socket] Welcome enviado a {} por socket ({} bytes)",
+                        addr,
+                        data.len()
+                    );
                 }
 
                 // Log cada 100 mensajes para no saturar la consola
@@ -346,12 +448,32 @@ async fn handle_client(
 
                                 player_id = Some(id);
 
-                                let _ = tx
+                                // Obtener configuración y mapa del estado
+                                let (config, map) = {
+                                    let s = state.lock().unwrap();
+                                    (s.game_config.clone(), s.map.clone())
+                                };
+
+                                println!(
+                                    "📤 [Server] Enviando Welcome a jugador {} por canal...",
+                                    id
+                                );
+                                let send_result = tx
                                     .send(ServerMessage::Welcome {
                                         player_id: id,
-                                        game_config: GameConfig::default(),
+                                        game_config: config,
+                                        map,
                                     })
                                     .await;
+
+                                if send_result.is_err() {
+                                    println!("❌ [Server] Error al enviar Welcome por canal para jugador {}", id);
+                                } else {
+                                    println!(
+                                        "✅ [Server] Welcome enviado por canal para jugador {}",
+                                        id
+                                    );
+                                }
 
                                 let _ = event_tx
                                     .send(NetworkEvent::NewPlayer {
@@ -439,8 +561,9 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         RigidBody::Dynamic,
         Collider::ball(config.ball_radius),
         Velocity::zero(),
-        CollisionGroups::new(Group::GROUP_3, Group::ALL),
-        SolverGroups::new(Group::GROUP_3, Group::ALL),
+        // Pelota: colisiona con todo EXCEPTO líneas solo-jugadores (GROUP_6)
+        CollisionGroups::new(Group::GROUP_3, Group::ALL ^ Group::GROUP_6),
+        SolverGroups::new(Group::GROUP_3, Group::ALL ^ Group::GROUP_6),
         AdditionalMassProperties::Mass(config.ball_mass),
         Friction {
             coefficient: config.ball_friction,
@@ -556,8 +679,9 @@ fn process_network_messages(
                         RigidBody::Dynamic,
                         Collider::ball(config.sphere_radius),
                         Velocity::zero(),
-                        CollisionGroups::new(Group::GROUP_4, Group::ALL),
-                        SolverGroups::new(Group::GROUP_4, Group::ALL),
+                        // Jugador: colisiona con todo EXCEPTO líneas solo-pelota (GROUP_5)
+                        CollisionGroups::new(Group::GROUP_4, Group::ALL ^ Group::GROUP_5),
+                        SolverGroups::new(Group::GROUP_4, Group::ALL ^ Group::GROUP_5),
                         Friction {
                             coefficient: config.sphere_friction,
                             combine_rule: CoefficientCombineRule::Average,
@@ -924,8 +1048,13 @@ fn apply_magnus_effect(
             ball.angular_velocity *= 0.98;
         } else {
             force.force = Vec2::ZERO;
-            // Resetear spin cuando la pelota está casi quieta
-            ball.angular_velocity = 0.0;
+            // NO resetear el spin - dejarlo decaer naturalmente
+            // Solo aplicar decaimiento cuando hay spin
+            if ball.angular_velocity.abs() > 0.01 {
+                ball.angular_velocity *= 0.98;
+            } else {
+                ball.angular_velocity = 0.0;
+            }
         }
     }
 }
@@ -1186,10 +1315,24 @@ fn broadcast_game_state(
                     not_interacting: player.not_interacting,
                 })
             } else {
+                println!(
+                    "⚠️  No se pudo obtener Transform/Velocity para jugador {}",
+                    player.id
+                );
                 None
             }
         })
         .collect();
+
+    // Log cada 60 ticks (2 segundos)
+    if tick.0 % 60 == 0 {
+        println!(
+            "📊 [Tick {}] Jugadores: {}, Ready: {}",
+            tick.0,
+            players.iter().count(),
+            players.iter().filter(|p| p.is_ready).count()
+        );
+    }
 
     let ball_state = if let Ok((transform, velocity, ball)) = ball.get_single() {
         BallState {
