@@ -51,8 +51,8 @@ fn main() {
             FixedUpdate,
             (
                 process_network_messages,
-                detect_slide,
-                execute_slide,
+                //detect_slide,
+                //execute_slide,
                 move_players,
                 handle_collision_player,
                 look_at_ball,
@@ -146,6 +146,7 @@ struct Player {
     tx: mpsc::Sender<ServerMessage>,
     pub is_ready: bool,
 
+    not_interacting: bool,
     // Barrida/Slide
     is_sliding: bool,
     slide_timer: f32,
@@ -552,6 +553,7 @@ fn process_network_messages(
                     curve_charging: false,
                     tx,
                     is_ready: false,
+                    not_interacting: false,
                     is_sliding: false,
                     slide_timer: 0.0,
                     slide_direction: Vec2::ZERO,
@@ -646,11 +648,14 @@ fn move_players(
 // Sistema de RustBall - permite atravesar la pelota con Sprint
 fn handle_collision_player(
     game_input: Res<GameInputManager>,
-    player_query: Query<&Player>,
+    mut player_query: Query<&mut Player>,
     mut sphere_query: Query<&mut SolverGroups, With<Sphere>>,
 ) {
-    for player in player_query.iter() {
+    for mut player in player_query.iter_mut() {
         let player_id = player.id;
+
+        let stop_interact = game_input.is_pressed(player_id, GameAction::StopInteract);
+        player.not_interacting = stop_interact;
 
         if let Ok(mut solver_groups) = sphere_query.get_mut(player.sphere) {
             if game_input.is_pressed(player_id, GameAction::StopInteract) {
@@ -761,11 +766,11 @@ fn look_at_ball(
                     let mut angle = direction.y.atan2(direction.x);
                     let tilt_rad = 30.0f32.to_radians();
 
-                    if game_input.is_pressed(player.id, GameAction::CurveRight) {
+                    /*if game_input.is_pressed(player.id, GameAction::CurveRight) {
                         angle += tilt_rad;
                     } else if game_input.is_pressed(player.id, GameAction::CurveLeft) {
                         angle -= tilt_rad;
-                    }
+                    }*/
 
                     sphere_transform.rotation = Quat::from_rotation_z(angle);
                 }
@@ -888,7 +893,9 @@ fn attract_ball(
         let player_id = player.id;
 
         // Con Sprint no hay interacción con la pelota
-        if game_input.is_pressed(player_id, GameAction::Sprint) {
+        if game_input.is_pressed(player_id, GameAction::Sprint)
+            || game_input.is_pressed(player_id, GameAction::Kick)
+        {
             continue;
         }
 
@@ -1127,6 +1134,7 @@ fn broadcast_game_state(
                     curve_charge: player.curve_charge,
                     curve_charging: player.curve_charging,
                     is_sliding: player.is_sliding,
+                    not_interacting: player.not_interacting,
                 })
             } else {
                 None

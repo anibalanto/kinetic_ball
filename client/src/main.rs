@@ -62,7 +62,9 @@ fn main() {
         .insert_resource(InputSender(input_tx))
         .insert_resource(MyPlayerId(None))
         .insert_resource(PreviousInput::default())
-        .insert_resource(DoubleTapTracker { last_space_press: -999.0 })
+        .insert_resource(DoubleTapTracker {
+            last_space_press: -999.0,
+        })
         .add_systems(Startup, setup)
         // Lógica de red y entrada (frecuencia fija)
         .add_systems(
@@ -76,10 +78,10 @@ fn main() {
         .add_systems(
             Update,
             (
-                interpolate_entities,   // Suaviza el movimiento entre posiciones de red
-                camera_follow_player,   // La cámara debe seguir al jugador cada frame
-                update_charge_bar,      // Actualiza la barra de carga de patada
-                update_player_sprite,   // Cambia sprite según estado de slide
+                interpolate_entities, // Suaviza el movimiento entre posiciones de red
+                camera_follow_player, // La cámara debe seguir al jugador cada frame
+                update_charge_bar,    // Actualiza la barra de carga de patada
+                update_player_sprite, // Cambia sprite según estado de slide
             ),
         )
         .run();
@@ -114,6 +116,8 @@ struct RemotePlayer {
     id: u32,
     kick_charge: f32,
     is_sliding: bool,
+    not_interacting: bool,
+    base_color: Color,
 }
 
 #[derive(Component)]
@@ -132,6 +136,12 @@ struct Interpolated {
 
 #[derive(Component)]
 struct KickChargeBar;
+
+#[derive(Component)]
+struct KickChargeBarCurveLeft;
+
+#[derive(Component)]
+struct KickChargeBarCurveRight;
 
 #[derive(Component)]
 struct PlayerSprite {
@@ -421,8 +431,8 @@ fn handle_input(
         move_left: keyboard.pressed(KeyCode::ArrowLeft),
         move_right: keyboard.pressed(KeyCode::ArrowRight),
         kick: keyboard.pressed(KeyCode::KeyS),
-        curve_left: keyboard.pressed(KeyCode::KeyA),
-        curve_right: keyboard.pressed(KeyCode::KeyD),
+        curve_left: keyboard.pressed(KeyCode::KeyD),
+        curve_right: keyboard.pressed(KeyCode::KeyA),
         stop_interact: keyboard.pressed(KeyCode::ShiftLeft),
         sprint: keyboard.pressed(KeyCode::Space),
         slide: slide_detected,
@@ -452,7 +462,12 @@ fn process_network_messages(
     mut my_id: ResMut<MyPlayerId>,
     mut ball_q: Query<(&mut Interpolated, &mut Transform, &RemoteBall), Without<RemotePlayer>>,
     mut players_q: Query<
-        (&mut Interpolated, &mut Transform, &mut RemotePlayer, &mut Collider),
+        (
+            &mut Interpolated,
+            &mut Transform,
+            &mut RemotePlayer,
+            &mut Collider,
+        ),
         (Without<RemoteBall>, Without<MainCamera>),
     >,
 ) {
@@ -559,12 +574,11 @@ fn process_network_messages(
                     ps.name, ps.id
                 );
 
-                // Color igual que RustBall: Keyboard = Azul
-                let player_color = if my_id.0 == Some(ps.id) {
-                    Color::srgb(0.3, 0.5, 0.9) // Azul RustBall (Keyboard)
-                } else {
-                    Color::srgb(0.9, 0.3, 0.3) // Rojo RustBall (otros)
-                };
+                // Generar un color basado en el ID (rápido y efectivo)
+                let r = ((ps.id * 123) % 255) as f32 / 255.0;
+                let g = ((ps.id * 456) % 255) as f32 / 255.0;
+                let b = ((ps.id * 789) % 255) as f32 / 255.0;
+                let player_color = Color::srgb(r, g, b);
 
                 // Igual que RustBall: usar textura con children
                 commands
@@ -577,6 +591,8 @@ fn process_network_messages(
                             id: ps.id,
                             kick_charge: ps.kick_charge,
                             is_sliding: ps.is_sliding,
+                            not_interacting: ps.not_interacting,
+                            base_color: player_color,
                         },
                         Collider::ball(config.sphere_radius), // Para debug rendering
                         Interpolated {
@@ -612,7 +628,50 @@ fn process_network_messages(
                                     anchor: bevy::sprite::Anchor::CenterLeft,
                                     ..default()
                                 },
-                                transform: Transform::from_xyz(-25.0, 60.0, 30.0),
+                                //transform: Transform::from_xyz(-25.0, 60.0, 30.0),
+                                transform: Transform::from_xyz(-5.0, 0.0, 30.0),
+                                ..default()
+                            },
+                        ));
+
+                        let angle = 25.0f32.to_radians();
+
+                        // Barra de carga de patada a la izquierda
+                        parent.spawn((
+                            KickChargeBarCurveLeft,
+                            SpriteBundle {
+                                sprite: Sprite {
+                                    color: Color::srgb(1.0, 0.0, 0.0),
+                                    custom_size: Some(Vec2::new(0.0, 5.0)),
+                                    anchor: bevy::sprite::Anchor::CenterLeft,
+                                    ..default()
+                                },
+                                transform: Transform {
+                                    translation: Vec3::new(0.0, -10.0, 30.0),
+                                    // Rotación hacia la izquierda (positiva en el eje Z)
+                                    rotation: Quat::from_rotation_z(-angle),
+                                    ..default()
+                                },
+                                ..default()
+                            },
+                        ));
+
+                        // Barra de carga de patada a la derecha
+                        parent.spawn((
+                            KickChargeBarCurveRight,
+                            SpriteBundle {
+                                sprite: Sprite {
+                                    color: Color::srgb(1.0, 0.0, 0.0),
+                                    custom_size: Some(Vec2::new(0.0, 5.0)),
+                                    anchor: bevy::sprite::Anchor::CenterLeft,
+                                    ..default()
+                                },
+                                transform: Transform {
+                                    translation: Vec3::new(0.0, 10.0, 30.0),
+                                    // Rotación hacia la derecha (negativa en el eje Z)
+                                    rotation: Quat::from_rotation_z(angle),
+                                    ..default()
+                                },
                                 ..default()
                             },
                         ));
@@ -672,18 +731,47 @@ fn camera_follow_player(
 
 fn update_charge_bar(
     player_query: Query<(&RemotePlayer, &Children)>,
-    mut bar_query: Query<&mut Sprite, With<KickChargeBar>>,
+    previous_input: Res<PreviousInput>, // Usamos Res si no vas a modificar el input
+    // Una sola query mutable para el Sprite evita el conflicto B0001
+    mut sprite_query: Query<&mut Sprite>,
+    // Queries de solo lectura para identificar qué tipo de barra es cada hijo
+    bar_main_q: Query<Entity, With<KickChargeBar>>,
+    bar_left_q: Query<Entity, With<KickChargeBarCurveLeft>>,
+    bar_right_q: Query<Entity, With<KickChargeBarCurveRight>>,
 ) {
-    for (player, children) in player_query.iter() {
-        // Buscar la barra de carga entre los hijos
-        for &child in children.iter() {
-            if let Ok(mut sprite) = bar_query.get_mut(child) {
-                let max_width = 50.0;
-                // Solo mostramos la barra si hay carga, si no, la "escondemos" (ancho 0)
-                sprite.custom_size = Some(Vec2::new(max_width * player.kick_charge, 5.0));
+    let max_width = 50.0;
 
-                // Opcional: Cambiar color de rojo a amarillo según la carga
-                sprite.color = Color::srgb(1.0, 1.0 - player.kick_charge, 0.0);
+    for (player, children) in player_query.iter() {
+        for &child in children.iter() {
+            // Intentamos obtener el sprite del hijo
+            if let Ok(mut sprite) = sprite_query.get_mut(child) {
+                // 1. Caso: Barra Principal
+                if bar_main_q.contains(child) {
+                    sprite.custom_size = Some(Vec2::new(max_width * player.kick_charge, 5.0));
+                    sprite.color = Color::srgb(1.0, 1.0 - player.kick_charge, 0.0);
+                }
+                // 2. Caso: Curva Izquierda
+                else if bar_left_q.contains(child) {
+                    let coeficient = if previous_input.0.curve_left {
+                        0.5
+                    } else {
+                        0.0
+                    };
+                    sprite.custom_size =
+                        Some(Vec2::new(max_width * player.kick_charge * coeficient, 5.0));
+                    sprite.color = Color::srgb(0.0, 1.0, 1.0); // Color distinto para debug si quieres
+                }
+                // 3. Caso: Curva Derecha
+                else if bar_right_q.contains(child) {
+                    let coeficient = if previous_input.0.curve_right {
+                        0.5
+                    } else {
+                        0.0
+                    };
+                    sprite.custom_size =
+                        Some(Vec2::new(max_width * player.kick_charge * coeficient, 5.0));
+                    sprite.color = Color::srgb(0.0, 1.0, 1.0);
+                }
             }
         }
     }
@@ -696,24 +784,29 @@ fn update_player_sprite(
     config: Res<GameConfig>,
 ) {
     for (player_sprite, mut texture, mut sprite) in sprite_query.iter_mut() {
-        // Buscar el jugador correspondiente
-        for player in player_query.iter() {
-            if player.id == player_sprite.parent_id {
-                // Cambiar textura y tamaño según estado de slide
-                if player.is_sliding {
-                    *texture = asset_server.load("player_slide.png");
-                    // Tamaño vertical en espacio local (cuando el padre rota, se ve horizontal)
-                    sprite.custom_size = Some(Vec2::new(
-                        config.sphere_radius * 2.0,  // Ancho (un poco más ancho)
-                        config.sphere_radius * 2.5,  // Alto (más) - se convierte en largo cuando rota
-                    ));
-                } else {
-                    *texture = asset_server.load("player.png");
-                    // Tamaño cuadrado normal
-                    sprite.custom_size = Some(Vec2::splat(config.sphere_radius * 2.0));
-                }
-                break;
+        // Buscamos al jugador padre para obtener su color base y estado
+        if let Some(player) = player_query
+            .iter()
+            .find(|p| p.id == player_sprite.parent_id)
+        {
+            // 1. Gestionar Textura según Slide
+            if player.is_sliding {
+                *texture = asset_server.load("player_slide.png");
+                sprite.custom_size = Some(Vec2::new(
+                    config.sphere_radius * 2.0,
+                    config.sphere_radius * 2.5,
+                ));
+            } else {
+                *texture = asset_server.load("player.png");
+                sprite.custom_size = Some(Vec2::splat(config.sphere_radius * 2.0));
             }
+
+            // 2. APLICAR COLOR Y TRANSPARENCIA
+            // Si el modo stop_interact está activo, usamos alfa 0.3, si no 1.0
+            let alpha = if player.not_interacting { 0.3 } else { 1.0 };
+
+            // Aplicamos el color base que guardamos al spawnear con el nuevo alfa
+            sprite.color = player.base_color.with_alpha(alpha);
         }
     }
 }

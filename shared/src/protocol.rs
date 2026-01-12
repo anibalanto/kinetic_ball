@@ -1,12 +1,20 @@
+use bevy::prelude::{Component, Vec2};
 use serde::{Deserialize, Serialize};
-use bevy::prelude::{Vec2, Component};
 
 /// Mensajes que el cliente envía al servidor
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientMessage {
-    Join { player_name: String, input_type: NetworkInputType },
-    Input { sequence: u32, input: PlayerInput },
-    Ping { timestamp: u64 },
+    Join {
+        player_name: String,
+        input_type: NetworkInputType,
+    },
+    Input {
+        sequence: u32,
+        input: PlayerInput,
+    },
+    Ping {
+        timestamp: u64,
+    },
     Ready,
 }
 
@@ -53,11 +61,11 @@ pub enum ServerMessage {
     },
 
     PlayerDisconnected {
-        player_id: u32
+        player_id: u32,
     },
 
     Error {
-        message: String
+        message: String,
     },
 }
 
@@ -74,6 +82,7 @@ pub struct PlayerState {
     pub curve_charge: f32,
     pub curve_charging: bool,
     pub is_sliding: bool,
+    pub not_interacting: bool,
 }
 
 /// Estado de la pelota
