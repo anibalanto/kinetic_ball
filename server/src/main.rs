@@ -823,10 +823,11 @@ fn apply_magnus_effect(
 fn attract_ball(
     game_input: Res<GameInputManager>,
     config: Res<GameConfig>,
-    player_query: Query<(&Player, &Transform), With<Sphere>>,
+    player_query: Query<&Player>,
+    sphere_query: Query<&Transform, With<Sphere>>,
     mut ball_query: Query<(&Transform, &mut ExternalImpulse, &mut Velocity), With<Ball>>,
 ) {
-    for (player, player_transform) in player_query.iter() {
+    for player in player_query.iter() {
         let player_id = player.id;
 
         // Con Sprint no hay interacción con la pelota
@@ -835,69 +836,74 @@ fn attract_ball(
         }
 
         if !game_input.is_pressed(player_id, GameAction::StopInteract) {
-            for (ball_transform, mut impulse, mut velocity) in ball_query.iter_mut() {
-                let diff = player_transform.translation - ball_transform.translation;
-                let distance = diff.truncate().length();
+            if let Ok(player_transform) = sphere_query.get(player.sphere) {
+                for (ball_transform, mut impulse, mut velocity) in ball_query.iter_mut() {
+                    let diff = player_transform.translation - ball_transform.translation;
+                    let distance = diff.truncate().length();
 
-                // Radio de "pegado" - cuando está muy cerca, la pelota se queda pegada
-                let stick_radius = config.sphere_radius + 25.0;
+                    // Radio de "pegado" - cuando está muy cerca, la pelota se queda pegada
+                    let stick_radius = config.sphere_radius + 25.0;
 
-                if distance < stick_radius && distance > 1.0 {
-                    // Efecto pegado: frenar la pelota y atraerla suavemente
-                    let direction = diff.truncate().normalize_or_zero();
+                    if distance < stick_radius && distance > 1.0 {
+                        // Efecto pegado: frenar la pelota y atraerla suavemente
+                        let direction = diff.truncate().normalize_or_zero();
 
-                    // Frenar la velocidad de la pelota (damping fuerte)
-                    velocity.linvel *= 0.85;
+                        // Frenar la velocidad de la pelota (damping fuerte)
+                        velocity.linvel *= 0.85;
 
-                    // Atracción suave hacia el jugador
-                    let stick_force = direction * 5000.0;
-                    impulse.impulse += stick_force;
-                } else if distance < config.attract_max_distance
-                    && distance > config.attract_min_distance
-                {
-                    let direction = diff.truncate().normalize_or_zero();
+                        // Atracción suave hacia el jugador
+                        let stick_force = direction * 5000.0;
+                        impulse.impulse += stick_force;
+                    } else if distance < config.attract_max_distance
+                        && distance > config.attract_min_distance
+                    {
+                        let direction = diff.truncate().normalize_or_zero();
 
-                    // Fuerza de atracción que aumenta cuando la pelota se acerca
-                    // pero no cuando ya está muy cerca (para evitar oscilaciones)
-                    let distance_factor = 1.0
-                        - (distance - config.attract_min_distance)
-                            / (config.attract_max_distance - config.attract_min_distance);
+                        // Fuerza de atracción que aumenta cuando la pelota se acerca
+                        // pero no cuando ya está muy cerca (para evitar oscilaciones)
+                        let distance_factor = 1.0
+                            - (distance - config.attract_min_distance)
+                                / (config.attract_max_distance - config.attract_min_distance);
 
-                    // Reducir la fuerza si la pelota ya se mueve hacia el jugador
-                    let current_velocity_toward_player = velocity.linvel.dot(direction);
-                    let velocity_factor = if current_velocity_toward_player > 0.0 {
-                        (1.0 - current_velocity_toward_player / 200.0).max(0.2)
-                    } else {
-                        1.0
-                    };
+                        // Reducir la fuerza si la pelota ya se mueve hacia el jugador
+                        let current_velocity_toward_player = velocity.linvel.dot(direction);
+                        let velocity_factor = if current_velocity_toward_player > 0.0 {
+                            (1.0 - current_velocity_toward_player / 200.0).max(0.2)
+                        } else {
+                            1.0
+                        };
 
-                    let attract_impulse = direction
-                        * config.attract_force
-                        * distance_factor
-                        * velocity_factor
-                        * 0.016; // ~1/60 para frame
-                    impulse.impulse += attract_impulse;
+                        let attract_impulse = direction
+                            * config.attract_force
+                            * distance_factor
+                            * velocity_factor
+                            * 0.016; // ~1/60 para frame
+                        impulse.impulse += attract_impulse;
+                    }
                 }
             }
         }
     }
 }
 
-// Sistema de auto-toque: Da un pequeño impulso a la pelota cuando está muy cerca y corriendo
+// Sistema de auto-toque: Da un pequeño toque a la pelota cuando está muy cerca y corriendo
+// Controles: haxball-mp (Sprint/StopInteract)
+// Física: RustBall (velocidad directa, validaciones, proximity_factor)
 fn auto_touch_ball(
     game_input: Res<GameInputManager>,
     config: Res<GameConfig>,
-    player_query: Query<(&Player, &Transform), With<Sphere>>,
-    mut ball_query: Query<(&Transform, &mut ExternalImpulse), With<Ball>>,
+    player_query: Query<&Player>,
+    sphere_query: Query<&Transform, With<Sphere>>,
+    mut ball_query: Query<(&Transform, &mut Velocity), With<Ball>>,
 ) {
     // Radio de auto-toque (más pequeño que kick_distance_threshold)
-    let auto_touch_radius = config.sphere_radius + config.ball_radius + 25.0;
-    let auto_touch_force = 500.0; // Fuerza muy suave
+    let auto_touch_radius = config.sphere_radius + config.ball_radius + 30.0;
+    let touch_strength = 500.0;
 
-    for (player, player_transform) in player_query.iter() {
+    for player in player_query.iter() {
         let player_id = player.id;
 
-        // No auto-tocar si no está en sprint
+        // CONTROLES (haxball-mp): No auto-tocar si no está en sprint
         // o si está soltando la pelota intencionalmente
         if !game_input.is_pressed(player_id, GameAction::Sprint)
             || game_input.is_pressed(player_id, GameAction::StopInteract)
@@ -905,18 +911,23 @@ fn auto_touch_ball(
             continue;
         }
 
-        for (ball_transform, mut impulse) in ball_query.iter_mut() {
-            let diff = ball_transform.translation - player_transform.translation;
-            let distance = diff.truncate().length();
+        if let Ok(player_transform) = sphere_query.get(player.sphere) {
+            for (ball_transform, mut ball_velocity) in ball_query.iter_mut() {
+                let diff = ball_transform.translation - player_transform.translation;
+                let distance = diff.truncate().length();
 
-            // Solo aplicar auto-toque cuando está muy cerca
-            if distance < auto_touch_radius && distance > 1.0 {
-                // Dirección desde el jugador hacia la pelota
-                let direction = diff.truncate().normalize_or_zero();
+                // Solo aplicar auto-toque cuando está muy cerca
+                if distance < auto_touch_radius && distance > 1.0 {
+                    let direction = diff.truncate().normalize_or_zero();
 
-                // Aplicar un impulso muy suave
-                let touch_impulse = direction * auto_touch_force;
-                impulse.impulse += touch_impulse;
+                    // VALIDACIÓN (RustBall): Solo aplicar si la pelota no se está alejando ya
+                    let velocity_away = ball_velocity.linvel.dot(direction);
+                    if velocity_away < touch_strength {
+                        // FÍSICA (RustBall): Impulso proporcional a qué tan cerca está
+                        let proximity_factor = 1.0 - (distance / auto_touch_radius);
+                        ball_velocity.linvel += direction * touch_strength * proximity_factor;
+                    }
+                }
             }
         }
     }
