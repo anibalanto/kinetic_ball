@@ -279,7 +279,11 @@ enum NetworkEvent {
 // NETWORK SERVER
 // ============================================================================
 
-fn start_network_server(event_tx: mpsc::Sender<NetworkEvent>, state: Arc<Mutex<NetworkState>>, port: u16) {
+fn start_network_server(
+    event_tx: mpsc::Sender<NetworkEvent>,
+    state: Arc<Mutex<NetworkState>>,
+    port: u16,
+) {
     // Creamos un runtime de Tokio dedicado para la red
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -1220,12 +1224,12 @@ fn auto_touch_ball(
     game_input: Res<GameInputManager>,
     config: Res<GameConfig>,
     player_query: Query<&Player>,
-    sphere_query: Query<&Transform, With<Sphere>>,
+    sphere_query: Query<(&Transform, &Velocity), (With<Sphere>, Without<Ball>)>,
     mut ball_query: Query<(&Transform, &mut Velocity), With<Ball>>,
 ) {
-    // Radio de auto-toque (más pequeño que kick_distance_threshold)
+    // Radio de detección para auto-toque
     let auto_touch_radius = config.sphere_radius + config.ball_radius + 5.0;
-    let touch_strength = 400.0;
+    let touch_strength = 500.0;
 
     for player in player_query.iter() {
         let player_id = player.id;
@@ -1238,21 +1242,53 @@ fn auto_touch_ball(
             continue;
         }
 
-        if let Ok(player_transform) = sphere_query.get(player.sphere) {
+        if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
+            // Dirección del movimiento del jugador
+            let player_movement = player_velocity.linvel.normalize_or_zero();
+
+            // Solo aplicar auto-toque si el jugador se está moviendo
+            if player_movement.length_squared() < 0.1 {
+                continue;
+            }
+
             for (ball_transform, mut ball_velocity) in ball_query.iter_mut() {
                 let diff = ball_transform.translation - player_transform.translation;
                 let distance = diff.truncate().length();
 
                 // Solo aplicar auto-toque cuando está muy cerca
                 if distance < auto_touch_radius && distance > 1.0 {
-                    let direction = diff.truncate().normalize_or_zero();
+                    // Vector hacia la pelota desde el jugador
+                    let to_ball = diff.truncate().normalize_or_zero();
 
-                    // VALIDACIÓN (RustBall): Solo aplicar si la pelota no se está alejando ya
-                    let velocity_away = ball_velocity.linvel.dot(direction);
-                    if velocity_away < touch_strength {
-                        // FÍSICA (RustBall): Impulso proporcional a qué tan cerca está
-                        let proximity_factor = 1.0 - (distance / auto_touch_radius);
-                        ball_velocity.linvel += direction * touch_strength * proximity_factor;
+                    // Vector perpendicular a la dirección de movimiento (derecha del jugador)
+                    let right = Vec2::new(-player_movement.y, player_movement.x);
+
+                    // Calcular cuánto está desviada la pelota lateralmente
+                    let lateral_offset = to_ball.dot(right);
+
+                    // Calcular corrección lateral para centrar la pelota
+                    // Si está a la derecha (+), empujar a la izquierda (-)
+                    // Si está a la izquierda (-), empujar a la derecha (+)
+                    let lateral_correction = -right * lateral_offset * 0.5;
+
+                    // Dirección final: hacia adelante + corrección lateral para centrar
+                    // IMPORTANTE: Ya normalizada para mantener magnitud consistente
+                    let direction = (player_movement + lateral_correction).normalize_or_zero();
+
+                    // Calcular velocidad de la pelota en la dirección del movimiento
+                    let ball_speed_forward = ball_velocity.linvel.dot(player_movement);
+                    let player_speed = player_velocity.linvel.length();
+
+                    // Solo aplicar toque si la pelota NO se está alejando más rápido que el jugador
+                    // Esto crea el efecto de "toques" espaciados
+                    if ball_speed_forward < player_speed * 1.5 {
+                        // Ajustar fuerza basado en cuánta corrección lateral hay
+                        // Cuando hay mucha corrección (cambio de dirección), reducir la fuerza
+                        let lateral_factor = 1.0 - lateral_offset.abs().min(0.5);
+                        let adjusted_strength = touch_strength * lateral_factor;
+
+                        // Aplicar impulso con fuerza ajustada para distancia consistente
+                        ball_velocity.linvel += direction * adjusted_strength;
                     }
                 }
             }
