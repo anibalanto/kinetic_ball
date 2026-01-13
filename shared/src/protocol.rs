@@ -85,6 +85,7 @@ pub struct PlayerState {
     pub curve_charging: bool,
     pub is_sliding: bool,
     pub not_interacting: bool,
+    pub ball_target_position: Option<Vec2>,
 }
 
 /// Estado de la pelota

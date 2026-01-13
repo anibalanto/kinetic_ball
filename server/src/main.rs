@@ -236,6 +236,7 @@ struct Player {
     slide_timer: f32,
     slide_direction: Vec2,
     slide_cooldown: f32,
+    ball_target_position: Option<Vec2>,
 }
 
 // Marker component para la entidad física del jugador (igual que RustBall)
@@ -719,6 +720,7 @@ fn process_network_messages(
                     slide_timer: 0.0,
                     slide_direction: Vec2::ZERO,
                     slide_cooldown: 0.0,
+                    ball_target_position: None,
                 });
 
                 println!("✅ Jugador {} spawneado: {}", id, name);
@@ -1217,78 +1219,71 @@ fn execute_slide(
     }
 }
 
-// Sistema de auto-toque: Da un pequeño toque a la pelota cuando está muy cerca y corriendo
-// Controles: haxball-mp (Sprint/StopInteract)
-// Física: RustBall (velocidad directa, validaciones, proximity_factor)
 fn auto_touch_ball(
     game_input: Res<GameInputManager>,
     config: Res<GameConfig>,
-    player_query: Query<&Player>,
+    mut player_query: Query<&mut Player>,
     sphere_query: Query<(&Transform, &Velocity), (With<Sphere>, Without<Ball>)>,
     mut ball_query: Query<(&Transform, &mut Velocity), With<Ball>>,
+    time: Res<Time>,
 ) {
-    // Radio de detección para auto-toque
-    let auto_touch_radius = config.sphere_radius + config.ball_radius + 5.0;
-    let touch_strength = 500.0;
+    let player_diameter = config.sphere_radius * 2.0;
+    let target_distance = player_diameter * 2.0;
+    let activation_radius = config.sphere_radius + config.ball_radius + 5.0;
 
-    for player in player_query.iter() {
-        let player_id = player.id;
-
-        // CONTROLES (haxball-mp): No auto-tocar si no está en sprint
-        // o si está soltando la pelota intencionalmente
-        if !game_input.is_pressed(player_id, GameAction::Sprint)
-            || game_input.is_pressed(player_id, GameAction::StopInteract)
+    for mut player in player_query.iter_mut() {
+        if !game_input.is_pressed(player.id, GameAction::Sprint)
+            || game_input.is_pressed(player.id, GameAction::StopInteract)
         {
             continue;
         }
 
         if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
-            // Dirección del movimiento del jugador
-            let player_movement = player_velocity.linvel.normalize_or_zero();
+            let p_vel = player_velocity.linvel;
+            let p_dir = p_vel.normalize_or_zero();
+            let p_speed = p_vel.length();
 
-            // Solo aplicar auto-toque si el jugador se está moviendo
-            if player_movement.length_squared() < 0.1 {
+            if p_speed < 1.0 {
                 continue;
             }
 
             for (ball_transform, mut ball_velocity) in ball_query.iter_mut() {
-                let diff = ball_transform.translation - player_transform.translation;
-                let distance = diff.truncate().length();
+                let p_pos = player_transform.translation.truncate();
+                let b_pos = ball_transform.translation.truncate();
+                let diff = b_pos - p_pos;
+                if diff.length() < activation_radius {
+                    // 1. POSICIÓN OBJETIVO BASE (Relativa al jugador ahora)
+                    let base_target_pos = p_pos + (p_dir * target_distance);
 
-                // Solo aplicar auto-toque cuando está muy cerca
-                if distance < auto_touch_radius && distance > 1.0 {
-                    // Vector hacia la pelota desde el jugador
-                    let to_ball = diff.truncate().normalize_or_zero();
+                    // 2. PREDICCIÓN: ¿Dónde estará ese punto en 'T' segundos?
+                    // Si el jugador se mueve a p_vel, el punto objetivo también.
+                    let time_to_reach = 0.5; // Ajusta esto: 1.0 es lento, 0.2 es muy rápido
+                    let predicted_target_pos = base_target_pos + (p_vel * time_to_reach);
 
-                    // Vector perpendicular a la dirección de movimiento (derecha del jugador)
-                    let right = Vec2::new(-player_movement.y, player_movement.x);
+                    player.ball_target_position = Some(predicted_target_pos);
 
-                    // Calcular cuánto está desviada la pelota lateralmente
-                    let lateral_offset = to_ball.dot(right);
+                    // 3. CÁLCULO DE LA "VELOCIDAD JUSTA" PARA LLEGAR EN EL TIEMPO 'T'
+                    let displacement = predicted_target_pos - b_pos;
+                    let distance = displacement.length();
 
-                    // Calcular corrección lateral para centrar la pelota
-                    // Si está a la derecha (+), empujar a la izquierda (-)
-                    // Si está a la izquierda (-), empujar a la derecha (+)
-                    let lateral_correction = -right * lateral_offset * 0.5;
+                    // v = d / t (Velocidad necesaria para cubrir la distancia en el tiempo deseado)
+                    let required_speed = distance / time_to_reach;
 
-                    // Dirección final: hacia adelante + corrección lateral para centrar
-                    // IMPORTANTE: Ya normalizada para mantener magnitud consistente
-                    let direction = (player_movement + lateral_correction).normalize_or_zero();
+                    // 4. DIRECCIÓN Y VELOCIDAD FINAL
+                    // Importante: No sumamos p_vel aquí porque ya está implícito en la predicción
+                    let target_velocity = displacement.normalize_or_zero() * required_speed;
 
-                    // Calcular velocidad de la pelota en la dirección del movimiento
-                    let ball_speed_forward = ball_velocity.linvel.dot(player_movement);
-                    let player_speed = player_velocity.linvel.length();
+                    // 5. APLICACIÓN FÍSICA (Suavizado para evitar latigazos)
+                    // DeltaV = lo que quiero - lo que tengo
+                    let delta_v = target_velocity - ball_velocity.linvel;
 
-                    // Solo aplicar toque si la pelota NO se está alejando más rápido que el jugador
-                    // Esto crea el efecto de "toques" espaciados
-                    if ball_speed_forward < player_speed * 1.5 {
-                        // Ajustar fuerza basado en cuánta corrección lateral hay
-                        // Cuando hay mucha corrección (cambio de dirección), reducir la fuerza
-                        let lateral_factor = 1.0 - lateral_offset.abs().min(0.5);
-                        let adjusted_strength = touch_strength * lateral_factor;
+                    // Usamos un factor de respuesta. 1.0 es instantáneo, 0.5 es más elástico.
+                    let responsiveness = 0.6;
+                    ball_velocity.linvel += delta_v * responsiveness;
 
-                        // Aplicar impulso con fuerza ajustada para distancia consistente
-                        ball_velocity.linvel += direction * adjusted_strength;
+                    // 6. SEGURIDAD: Si está muy cerca, simplemente igualar velocidad
+                    if distance < 2.0 {
+                        ball_velocity.linvel = p_vel;
                     }
                 }
             }
@@ -1349,6 +1344,7 @@ fn broadcast_game_state(
                     curve_charging: player.curve_charging,
                     is_sliding: player.is_sliding,
                     not_interacting: player.not_interacting,
+                    ball_target_position: player.ball_target_position,
                 })
             } else {
                 println!(

@@ -87,6 +87,7 @@ fn main() {
                 camera_zoom_control,  // Control de zoom con teclas numéricas
                 update_charge_bar,    // Actualiza la barra de carga de patada
                 update_player_sprite, // Cambia sprite según estado de slide
+                update_target_ball_position,
             ),
         )
         .run();
@@ -132,6 +133,7 @@ struct RemotePlayer {
     is_sliding: bool,
     not_interacting: bool,
     base_color: Color,
+    ball_target_position: Option<Vec2>,
 }
 
 #[derive(Component)]
@@ -620,6 +622,7 @@ fn process_network_messages(
                     transform.translation.y = ps.position.y;
                     rp.kick_charge = ps.kick_charge;
                     rp.is_sliding = ps.is_sliding;
+                    rp.ball_target_position = ps.ball_target_position;
 
                     // Actualizar collider según estado de slide
                     if ps.is_sliding {
@@ -661,6 +664,7 @@ fn process_network_messages(
                             is_sliding: ps.is_sliding,
                             not_interacting: ps.not_interacting,
                             base_color: player_color,
+                            ball_target_position: ps.ball_target_position,
                         },
                         Collider::ball(config.sphere_radius), // Para debug rendering
                         Interpolated {
@@ -1037,6 +1041,19 @@ fn render_map(mut gizmos: Gizmos, loaded_map: Res<LoadedMap>) {
     for disc in &map.discs {
         let pos = Vec3::new(disc.pos[0], disc.pos[1], 5.0);
         gizmos.circle(pos, Dir3::Z, disc.radius, disc_color);
+    }
+}
+
+fn update_target_ball_position(mut gizmos: Gizmos, player_query: Query<&RemotePlayer>) {
+    for player in player_query.iter() {
+        let Some(b_target_pos) = player.ball_target_position else {
+            return;
+        };
+        println!("ball target pos {}", b_target_pos);
+
+        let disc_color = Color::srgb(0.7, 0.7, 0.7);
+
+        gizmos.circle_2d(b_target_pos, 3.0, disc_color);
     }
 }
 
