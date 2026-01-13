@@ -134,6 +134,7 @@ fn main() {
         .add_systems(
             FixedUpdate,
             (
+                update_input_manager,
                 process_network_messages,
                 //detect_slide,
                 //execute_slide,
@@ -145,7 +146,7 @@ fn main() {
                 kick_ball,
                 apply_magnus_effect,
                 attract_ball,
-                auto_touch_ball,
+                //auto_touch_ball,
                 update_ball_damping,
                 broadcast_game_state,
             ),
@@ -208,6 +209,12 @@ impl GameInputManager {
             .get(&player_id)
             .map(|s| s.just_released(action))
             .unwrap_or(false)
+    }
+
+    pub fn tick(&mut self) {
+        for source in self.sources.values_mut() {
+            source.update();
+        }
     }
 }
 
@@ -550,6 +557,10 @@ async fn handle_client(
     }
 }
 
+fn update_input_manager(mut game_input: ResMut<GameInputManager>) {
+    game_input.tick();
+}
+
 // ============================================================================
 // GAME SETUP
 // ============================================================================
@@ -864,9 +875,7 @@ fn charge_kick(
                     player.kick_charging = false;
                     player.kick_charge = 0.0;
                 } else {
-                    let should_start = just_pressed && !player.kick_charging;
-
-                    if should_start {
+                    if just_pressed {
                         player.kick_charging = true;
                         player.kick_charge = 0.0;
                     }
@@ -878,10 +887,10 @@ fn charge_kick(
                         }
                     }
 
-                    let should_release = !any_kick_button && player.kick_charging;
+                    /*let should_release = !any_kick_button && player.kick_charging;
                     if should_release {
                         player.kick_charging = false;
-                    }
+                    }*/
                 }
             }
         }
@@ -935,67 +944,83 @@ fn kick_ball(
     for mut player in player_query.iter_mut() {
         let player_id = player.id;
 
-        // Chequear si este jugador soltó algún botón de patada
-        let kick_released = game_input.just_released(player_id, GameAction::Kick);
-        let curve_left_released = game_input.just_released(player_id, GameAction::CurveLeft);
-        let curve_right_released = game_input.just_released(player_id, GameAction::CurveRight);
+        let any_kick_button = game_input.is_pressed(player_id, GameAction::Kick)
+            || game_input.is_pressed(player_id, GameAction::CurveLeft)
+            || game_input.is_pressed(player_id, GameAction::CurveRight);
 
-        let should_kick = kick_released || curve_left_released || curve_right_released;
+        let should_reset_kick = !any_kick_button && player.kick_charging;
 
-        if should_kick && player.kick_charge > 0.0 {
-            // Determinar curva según qué botón soltaste
-            let auto_curve = if curve_right_released {
-                -1.0 // D = curva derecha
-            } else if curve_left_released {
-                1.0 // A = curva izquierda
-            } else {
-                0.0 // S = sin curva
-            };
+        let should_kick =
+            player.kick_charge > 0.0 && !game_input.is_pressed(player_id, GameAction::StopInteract);
 
-            if let Ok(player_transform) = sphere_query.get(player.sphere) {
-                for (ball_transform, mut impulse, mut ball) in ball_query.iter_mut() {
-                    let distance = player_transform
-                        .translation
-                        .distance(ball_transform.translation);
+        if should_reset_kick {
+            player.kick_charging = false;
 
-                    if distance < config.kick_distance_threshold {
-                        let mut direction = (ball_transform.translation
-                            - player_transform.translation)
-                            .truncate()
-                            .normalize_or_zero();
+            if should_kick {
+                // Chequear si este jugador soltó algún botón de patada
+                let kick_released = game_input.just_released(player_id, GameAction::Kick);
+                let curve_left_released =
+                    game_input.just_released(player_id, GameAction::CurveLeft);
+                let curve_right_released =
+                    game_input.just_released(player_id, GameAction::CurveRight);
 
-                        // La curva es directamente auto_curve (según botón presionado)
-                        let final_curve = auto_curve;
+                // Determinar curva según qué botón soltaste
+                let auto_curve = if curve_right_released {
+                    -1.0
+                } else if curve_left_released {
+                    1.0
+                } else if kick_released {
+                    0.0
+                } else {
+                    0.0
+                };
 
-                        // Inclinación física de 30 grados
-                        let angle_rad = 30.0f32.to_radians();
-                        let tilt_angle = if final_curve > 0.0 {
-                            -angle_rad
-                        } else if final_curve < 0.0 {
-                            angle_rad
-                        } else {
-                            0.0
-                        };
+                if let Ok(player_transform) = sphere_query.get(player.sphere) {
+                    for (ball_transform, mut impulse, mut ball) in ball_query.iter_mut() {
+                        let distance = player_transform
+                            .translation
+                            .distance(ball_transform.translation);
 
-                        if tilt_angle != 0.0 {
-                            let (sin_a, cos_a) = tilt_angle.sin_cos();
-                            direction = Vec2::new(
-                                direction.x * cos_a - direction.y * sin_a,
-                                direction.x * sin_a + direction.y * cos_a,
-                            );
+                        if distance < config.kick_distance_threshold {
+                            let mut direction = (ball_transform.translation
+                                - player_transform.translation)
+                                .truncate()
+                                .normalize_or_zero();
+
+                            // La curva es directamente auto_curve (según botón presionado)
+                            let final_curve = auto_curve;
+
+                            // Inclinación física de 30 grados
+                            let angle_rad = 30.0f32.to_radians();
+                            let tilt_angle = if final_curve > 0.0 {
+                                -angle_rad
+                            } else if final_curve < 0.0 {
+                                angle_rad
+                            } else {
+                                0.0
+                            };
+
+                            if tilt_angle != 0.0 {
+                                let (sin_a, cos_a) = tilt_angle.sin_cos();
+                                direction = Vec2::new(
+                                    direction.x * cos_a - direction.y * sin_a,
+                                    direction.x * sin_a + direction.y * cos_a,
+                                );
+                            }
+
+                            // Aplicamos el impulso de salida
+                            impulse.impulse =
+                                direction * (player.kick_charge * config.kick_force * 2000.0);
+
+                            // Aplicamos el torque inicial (Spin)
+                            let spin_force = final_curve * config.spin_transfer * 10.0;
+                            impulse.torque_impulse = spin_force;
+                            ball.angular_velocity = spin_force;
                         }
-
-                        // Aplicamos el impulso de salida
-                        impulse.impulse =
-                            direction * (player.kick_charge * config.kick_force * 2000.0);
-
-                        // Aplicamos el torque inicial (Spin)
-                        let spin_force = final_curve * config.spin_transfer * 10.0;
-                        impulse.torque_impulse = spin_force;
-                        ball.angular_velocity = spin_force;
                     }
                 }
             }
+            // luego de hacer kick, pero en el bloque should_reset_kick
             player.kick_charge = 0.0;
         }
     }

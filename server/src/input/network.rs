@@ -1,6 +1,5 @@
 /// NetworkInputSource - Implementación de InputSource para jugadores conectados por red
 /// Almacena el input actual y anterior para detectar just_pressed/just_released
-
 use super::core::{GameAction, InputSource};
 use shared::protocol::PlayerInput;
 
@@ -19,8 +18,11 @@ impl NetworkInputSource {
 
     /// Actualiza el input con uno nuevo recibido de la red
     pub fn set_input(&mut self, input: PlayerInput) {
-        self.previous = self.current.clone();
         self.current = input;
+    }
+
+    pub fn update(&mut self) {
+        self.previous = self.current.clone();
     }
 }
 
