@@ -1,6 +1,6 @@
+use crate::map::Map;
 use bevy::prelude::{Component, Vec2};
 use serde::{Deserialize, Serialize};
-use crate::map::Map;
 
 /// Mensajes que el cliente envía al servidor
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +86,7 @@ pub struct PlayerState {
     pub is_sliding: bool,
     pub not_interacting: bool,
     pub ball_target_position: Option<Vec2>,
+    pub dash_cooldown: f32,
 }
 
 /// Estado de la pelota
@@ -135,6 +136,9 @@ pub struct GameConfig {
     pub arena_height: f32,
     pub wall_restitution: f32,
 
+    // Dash time
+    pub dash_cooldown_duration: f32,
+
     // Map loading
     #[serde(default)]
     pub map_path: Option<String>,
@@ -151,7 +155,7 @@ impl Default for GameConfig {
     fn default() -> Self {
         Self {
             // Velocidades básicas
-            player_speed: 350.0,
+            player_speed: 375.0,
             kick_force: 800.0,
             attract_force: 800.0,
             magnus_coefficient: 33.0,
@@ -184,6 +188,9 @@ impl Default for GameConfig {
             arena_width: 2000.0,
             arena_height: 1500.0,
             wall_restitution: 0.8,
+
+            //Dash time
+            dash_cooldown_duration: 2.0,
 
             // Map loading
             map_path: None,

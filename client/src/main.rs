@@ -88,6 +88,7 @@ fn main() {
                 update_charge_bar,    // Actualiza la barra de carga de patada
                 update_player_sprite, // Cambia sprite según estado de slide
                 update_target_ball_position,
+                update_dash_cooldown,
             ),
         )
         .run();
@@ -134,6 +135,7 @@ struct RemotePlayer {
     not_interacting: bool,
     base_color: Color,
     ball_target_position: Option<Vec2>,
+    dash_cooldown: f32,
 }
 
 #[derive(Component)]
@@ -158,6 +160,9 @@ struct KickChargeBarCurveLeft;
 
 #[derive(Component)]
 struct KickChargeBarCurveRight;
+
+#[derive(Component)]
+struct DashCooldown;
 
 #[derive(Component)]
 struct PlayerSprite {
@@ -623,6 +628,7 @@ fn process_network_messages(
                     rp.kick_charge = ps.kick_charge;
                     rp.is_sliding = ps.is_sliding;
                     rp.ball_target_position = ps.ball_target_position;
+                    rp.dash_cooldown = ps.dash_cooldown;
 
                     // Actualizar collider según estado de slide
                     if ps.is_sliding {
@@ -665,6 +671,7 @@ fn process_network_messages(
                             not_interacting: ps.not_interacting,
                             base_color: player_color,
                             ball_target_position: ps.ball_target_position,
+                            dash_cooldown: ps.dash_cooldown,
                         },
                         Collider::ball(config.sphere_radius), // Para debug rendering
                         Interpolated {
@@ -742,6 +749,28 @@ fn process_network_messages(
                                     translation: Vec3::new(0.0, 10.0, 30.0),
                                     // Rotación hacia la derecha (negativa en el eje Z)
                                     rotation: Quat::from_rotation_z(angle),
+                                    ..default()
+                                },
+                                ..default()
+                            },
+                        ));
+
+                        let angle2 = 90.0f32.to_radians();
+
+                        // Barra de temporizadora de regate
+                        parent.spawn((
+                            DashCooldown,
+                            SpriteBundle {
+                                sprite: Sprite {
+                                    color: Color::srgb(1.0, 0.0, 0.0),
+                                    custom_size: Some(Vec2::new(0.0, 5.0)),
+                                    anchor: bevy::sprite::Anchor::CenterLeft,
+                                    ..default()
+                                },
+                                transform: Transform {
+                                    translation: Vec3::new(-10.0, -15.0, 30.0),
+                                    // Rotación hacia la derecha (negativa en el eje Z)
+                                    rotation: Quat::from_rotation_z(angle2),
                                     ..default()
                                 },
                                 ..default()
@@ -879,6 +908,29 @@ fn update_charge_bar(
                     sprite.custom_size =
                         Some(Vec2::new(max_width * player.kick_charge * coeficient, 5.0));
                     sprite.color = Color::srgb(0.0, 1.0, 1.0);
+                }
+            }
+        }
+    }
+}
+
+fn update_dash_cooldown(
+    player_query: Query<(&RemotePlayer, &Children)>,
+    // Una sola query mutable para el Sprite evita el conflicto B0001
+    mut sprite_query: Query<&mut Sprite>,
+    // Queries de solo lectura para identificar qué tipo de barra es cada hijo
+    bar_main_q: Query<Entity, With<DashCooldown>>,
+) {
+    let max_width = 30.0;
+
+    for (player, children) in player_query.iter() {
+        for &child in children.iter() {
+            // Intentamos obtener el sprite del hijo
+            if let Ok(mut sprite) = sprite_query.get_mut(child) {
+                // 1. Caso: Barra Principal
+                if bar_main_q.contains(child) {
+                    sprite.custom_size = Some(Vec2::new(max_width * player.dash_cooldown, 5.0));
+                    sprite.color = Color::srgb(1.0 - player.dash_cooldown, 1.0, 0.0);
                 }
             }
         }

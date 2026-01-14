@@ -146,7 +146,7 @@ fn main() {
                 kick_ball,
                 apply_magnus_effect,
                 attract_ball,
-                //auto_touch_ball,
+                dash_first_touch_ball,
                 update_ball_damping,
                 broadcast_game_state,
             ),
@@ -244,6 +244,7 @@ struct Player {
     slide_direction: Vec2,
     slide_cooldown: f32,
     ball_target_position: Option<Vec2>,
+    sprint_touch_cooldown: f32,
 }
 
 // Marker component para la entidad física del jugador (igual que RustBall)
@@ -732,6 +733,7 @@ fn process_network_messages(
                     slide_direction: Vec2::ZERO,
                     slide_cooldown: 0.0,
                     ball_target_position: None,
+                    sprint_touch_cooldown: 0.0,
                 });
 
                 println!("✅ Jugador {} spawneado: {}", id, name);
@@ -958,7 +960,7 @@ fn kick_ball(
 
             if should_kick {
                 // Chequear si este jugador soltó algún botón de patada
-                let kick_released = game_input.just_released(player_id, GameAction::Kick);
+                //let kick_released = game_input.just_released(player_id, GameAction::Kick);
                 let curve_left_released =
                     game_input.just_released(player_id, GameAction::CurveLeft);
                 let curve_right_released =
@@ -969,8 +971,6 @@ fn kick_ball(
                     -1.0
                 } else if curve_left_released {
                     1.0
-                } else if kick_released {
-                    0.0
                 } else {
                     0.0
                 };
@@ -1095,8 +1095,11 @@ fn attract_ball(
     game_input: Res<GameInputManager>,
     config: Res<GameConfig>,
     player_query: Query<&Player>,
-    sphere_query: Query<&Transform, With<Sphere>>,
-    mut ball_query: Query<(&Transform, &mut ExternalImpulse, &mut Velocity), With<Ball>>,
+    sphere_query: Query<(&Transform, &Velocity), (With<Sphere>, Without<Ball>)>,
+    mut ball_query: Query<
+        (&Transform, &mut ExternalImpulse, &mut Velocity),
+        (With<Ball>, Without<Sphere>),
+    >,
 ) {
     for player in player_query.iter() {
         let player_id = player.id;
@@ -1109,10 +1112,14 @@ fn attract_ball(
         }
 
         if !game_input.is_pressed(player_id, GameAction::StopInteract) {
-            if let Ok(player_transform) = sphere_query.get(player.sphere) {
+            if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
                 for (ball_transform, mut impulse, mut velocity) in ball_query.iter_mut() {
                     let diff = player_transform.translation - ball_transform.translation;
                     let distance = diff.truncate().length();
+
+                    if player_velocity.linvel.length() > config.player_speed * 0.1 {
+                        return;
+                    }
 
                     // Radio de "pegado" - cuando está muy cerca, la pelota se queda pegada
                     let stick_radius = config.sphere_radius + 30.0;
@@ -1244,7 +1251,7 @@ fn execute_slide(
     }
 }
 
-fn auto_touch_ball(
+fn dash_first_touch_ball(
     game_input: Res<GameInputManager>,
     config: Res<GameConfig>,
     mut player_query: Query<&mut Player>,
@@ -1253,62 +1260,82 @@ fn auto_touch_ball(
     time: Res<Time>,
 ) {
     let player_diameter = config.sphere_radius * 2.0;
-    let target_distance = player_diameter * 2.0;
-    let activation_radius = config.sphere_radius + config.ball_radius + 5.0;
+    let target_distance = player_diameter * 1.5;
+    let activation_radius = config.sphere_radius + config.ball_radius + 50.0;
 
     for mut player in player_query.iter_mut() {
-        if !game_input.is_pressed(player.id, GameAction::Sprint)
-            || game_input.is_pressed(player.id, GameAction::StopInteract)
-        {
+        if player.sprint_touch_cooldown > 0.0 {
+            if game_input.is_pressed(player.id, GameAction::Sprint) {
+                player.sprint_touch_cooldown -= time.delta_seconds() / 2.0;
+            } else {
+                player.sprint_touch_cooldown -= time.delta_seconds();
+            }
+        }
+
+        if game_input.is_pressed(player.id, GameAction::StopInteract) {
             continue;
         }
 
-        if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
-            let p_vel = player_velocity.linvel;
-            let p_dir = p_vel.normalize_or_zero();
-            let p_speed = p_vel.length();
+        if game_input.is_pressed(player.id, GameAction::Slide) {
+            if player.sprint_touch_cooldown <= 0.0 {
+                if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
+                    for (ball_transform, mut ball_velocity) in ball_query.iter_mut() {
+                        let p_pos = player_transform.translation.truncate();
+                        let b_pos = ball_transform.translation.truncate();
+                        let diff = b_pos - p_pos;
 
-            if p_speed < 1.0 {
-                continue;
-            }
+                        let p_vel = if player_velocity.linvel.length_squared() < 0.1 {
+                            // Vector desde el jugador hacia la pelota
+                            let dir_to_ball = diff.normalize_or_zero();
+                            // Asignamos una velocidad virtual (puedes usar config.player_speed o un valor fijo)
+                            dir_to_ball * config.player_speed * 0.5
+                        } else {
+                            player_velocity.linvel
+                        };
 
-            for (ball_transform, mut ball_velocity) in ball_query.iter_mut() {
-                let p_pos = player_transform.translation.truncate();
-                let b_pos = ball_transform.translation.truncate();
-                let diff = b_pos - p_pos;
-                if diff.length() < activation_radius {
-                    // 1. POSICIÓN OBJETIVO BASE (Relativa al jugador ahora)
-                    let base_target_pos = p_pos + (p_dir * target_distance);
+                        let p_dir = p_vel.normalize_or_zero();
 
-                    // 2. PREDICCIÓN: ¿Dónde estará ese punto en 'T' segundos?
-                    // Si el jugador se mueve a p_vel, el punto objetivo también.
-                    let time_to_reach = 0.5; // Ajusta esto: 1.0 es lento, 0.2 es muy rápido
-                    let predicted_target_pos = base_target_pos + (p_vel * time_to_reach);
+                        if diff.length() < activation_radius {
+                            // 1. POSICIÓN OBJETIVO BASE (Relativa al jugador ahora)
+                            let base_target_pos = p_pos + (p_dir * target_distance);
 
-                    player.ball_target_position = Some(predicted_target_pos);
+                            // 2. PREDICCIÓN: ¿Dónde estará ese punto en 'T' segundos?
+                            // Si el jugador se mueve a p_vel, el punto objetivo también.
+                            let time_to_reach = 0.2; // Ajusta esto: 1.0 es lento, 0.2 es muy rápido
+                            let predicted_target_pos = base_target_pos + (p_vel * time_to_reach);
 
-                    // 3. CÁLCULO DE LA "VELOCIDAD JUSTA" PARA LLEGAR EN EL TIEMPO 'T'
-                    let displacement = predicted_target_pos - b_pos;
-                    let distance = displacement.length();
+                            player.ball_target_position = Some(predicted_target_pos);
 
-                    // v = d / t (Velocidad necesaria para cubrir la distancia en el tiempo deseado)
-                    let required_speed = distance / time_to_reach;
+                            // 3. CÁLCULO DE LA "VELOCIDAD JUSTA" PARA LLEGAR EN EL TIEMPO 'T'
+                            let displacement = predicted_target_pos - b_pos;
+                            let distance = displacement.length();
 
-                    // 4. DIRECCIÓN Y VELOCIDAD FINAL
-                    // Importante: No sumamos p_vel aquí porque ya está implícito en la predicción
-                    let target_velocity = displacement.normalize_or_zero() * required_speed;
+                            // v = d / t (Velocidad necesaria para cubrir la distancia en el tiempo deseado)
+                            let required_speed = distance / time_to_reach;
 
-                    // 5. APLICACIÓN FÍSICA (Suavizado para evitar latigazos)
-                    // DeltaV = lo que quiero - lo que tengo
-                    let delta_v = target_velocity - ball_velocity.linvel;
+                            // 4. DIRECCIÓN Y VELOCIDAD FINAL
+                            // Importante: No sumamos p_vel aquí porque ya está implícito en la predicción
+                            let target_velocity = displacement.normalize_or_zero() * required_speed;
 
-                    // Usamos un factor de respuesta. 1.0 es instantáneo, 0.5 es más elástico.
-                    let responsiveness = 0.6;
-                    ball_velocity.linvel += delta_v * responsiveness;
+                            // 5. APLICACIÓN FÍSICA (Suavizado para evitar latigazos)
+                            // DeltaV = lo que quiero - lo que tengo
+                            let delta_v = target_velocity - ball_velocity.linvel;
 
-                    // 6. SEGURIDAD: Si está muy cerca, simplemente igualar velocidad
-                    if distance < 2.0 {
-                        ball_velocity.linvel = p_vel;
+                            // Usamos un factor de respuesta. 1.0 es instantáneo, 0.5 es más elástico.
+                            let responsiveness = 0.6;
+                            ball_velocity.linvel += delta_v * responsiveness;
+
+                            // 6. SEGURIDAD: Si está muy cerca, simplemente igualar velocidad
+                            if distance < 2.0 {
+                                ball_velocity.linvel = p_vel;
+                            }
+
+                            player.sprint_touch_cooldown = config.dash_cooldown_duration;
+                            println!(
+                                "⚡ Sprint Touch ejecutado. Cooldown iniciado para jugador {}",
+                                player.id
+                            );
+                        }
                     }
                 }
             }
@@ -1333,6 +1360,7 @@ fn update_ball_damping(
 
 fn broadcast_game_state(
     time: Res<Time>,
+    config: Res<GameConfig>,
     mut broadcast_timer: ResMut<BroadcastTimer>,
     mut tick: ResMut<GameTick>,
     players: Query<&Player>,
@@ -1370,6 +1398,7 @@ fn broadcast_game_state(
                     is_sliding: player.is_sliding,
                     not_interacting: player.not_interacting,
                     ball_target_position: player.ball_target_position,
+                    dash_cooldown: player.sprint_touch_cooldown / config.dash_cooldown_duration,
                 })
             } else {
                 println!(
