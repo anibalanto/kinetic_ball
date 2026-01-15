@@ -160,6 +160,8 @@ pub struct BallState {
 pub struct GameConfig {
     // Velocidades básicas
     pub player_speed: f32,
+    pub walk_coeficient: f32,
+    pub run_coeficient: f32,
     pub kick_force: f32,
     pub attract_force: f32,
     pub magnus_coefficient: f32,
@@ -213,6 +215,8 @@ impl Default for GameConfig {
         Self {
             // Velocidades básicas
             player_speed: 375.0,
+            walk_coeficient: 0.70,
+            run_coeficient: 1.0,
             kick_force: 800.0,
             attract_force: 800.0,
             magnus_coefficient: 33.0,

@@ -786,7 +786,7 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         },
         Restitution {
             coefficient: config.ball_restitution,
-            combine_rule: CoefficientCombineRule::Average,
+            combine_rule: CoefficientCombineRule::Min,
         },
         Damping {
             linear_damping: config.ball_linear_damping,
@@ -917,7 +917,7 @@ fn process_network_messages(
                         SolverGroups::new(Group::GROUP_4, Group::ALL ^ Group::GROUP_5),
                         Friction {
                             coefficient: config.sphere_friction,
-                            combine_rule: CoefficientCombineRule::Average,
+                            combine_rule: CoefficientCombineRule::Min,
                         },
                         Restitution {
                             coefficient: config.sphere_restitution,
@@ -1032,9 +1032,9 @@ fn move_players(
             if movement.length() > 0.0 {
                 // Reducir velocidad según el modo (igual que RustBall)
                 let speed_multiplier = if !game_input.is_pressed(player_id, GameAction::Sprint) {
-                    0.75 // 65% de velocidad cuando no corre
+                    config.walk_coeficient
                 } else {
-                    1.0
+                    config.run_coeficient
                 };
                 velocity.linvel =
                     movement.normalize_or_zero() * config.player_speed * speed_multiplier;
@@ -1097,7 +1097,7 @@ fn charge_kick(
                     .translation
                     .distance(ball_transform.translation);
 
-                if distance > config.kick_distance_threshold * 1.4 {
+                if distance > config.kick_distance_threshold * 3.0 {
                     player.kick_charging = false;
                     player.kick_charge = 0.0;
                 } else {
@@ -1341,12 +1341,14 @@ fn attract_ball(
                     let diff = player_transform.translation - ball_transform.translation;
                     let distance = diff.truncate().length();
 
-                    if player_velocity.linvel.length() > config.player_speed * 0.1 {
+                    if player_velocity.linvel.length()
+                        > config.player_speed * (config.walk_coeficient + 0.1)
+                    {
                         return;
                     }
 
                     // Radio de "pegado" - cuando está muy cerca, la pelota se queda pegada
-                    let stick_radius = config.sphere_radius + 30.0;
+                    let stick_radius = config.sphere_radius + 40.0;
 
                     if distance < stick_radius && distance > 1.0 {
                         // Efecto pegado: frenar la pelota y atraerla suavemente
