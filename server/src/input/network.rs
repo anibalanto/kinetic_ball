@@ -77,7 +77,6 @@ impl InputSource for NetworkInputSource {
     }
 
     fn update(&mut self) {
-        // En el servidor, update se hace cuando llegan nuevos inputs por red
-        // Este método se mantiene vacío por compatibilidad con el trait
+        self.previous = self.current.clone();
     }
 }

@@ -34,8 +34,13 @@ pub enum ControlMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GameDataMessage {
     // Del cliente
-    Input { sequence: u32, input: PlayerInput },
-    Ping { timestamp: u64 },
+    Input {
+        sequence: u32,
+        input: PlayerInput,
+    },
+    Ping {
+        timestamp: u64,
+    },
 
     // Del servidor
     GameState {

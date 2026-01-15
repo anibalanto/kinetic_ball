@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
+use matchbox_socket::{PeerId, PeerState, WebRtcSocket};
 use shared::*;
-use matchbox_socket::{WebRtcSocket, PeerId, PeerState};
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 
 mod input;
 mod map;
@@ -99,7 +99,10 @@ fn main() {
     // matchbox_server
     // Por defecto escucha en puerto 3536
 
-    println!("⚠️  Asegúrate de tener matchbox_server corriendo en puerto {}", cli.signaling_port);
+    println!(
+        "⚠️  Asegúrate de tener matchbox_server corriendo en puerto {}",
+        cli.signaling_port
+    );
     println!("   Ejecuta: matchbox_server --port {}", cli.signaling_port);
 
     let (network_tx, network_rx) = mpsc::channel();
@@ -165,7 +168,8 @@ fn main() {
                 dash_first_touch_ball,
                 update_ball_damping,
                 broadcast_game_state,
-            ),
+            )
+                .chain(),
         )
         .run();
 }
@@ -235,7 +239,7 @@ impl GameInputManager {
 
     pub fn tick(&mut self) {
         for source in self.sources.values_mut() {
-            source.update();
+            InputSource::update(source);
         }
     }
 }
@@ -292,17 +296,17 @@ enum NetworkEvent {
     NewPlayer {
         id: u32,
         name: String,
-        peer_id: PeerId,  // Matchbox peer ID
+        peer_id: PeerId, // Matchbox peer ID
     },
     PlayerInput {
-        peer_id: PeerId,  // Buscar por peer_id en lugar de por id
+        peer_id: PeerId, // Buscar por peer_id en lugar de por id
         input: PlayerInput,
     },
     PlayerDisconnected {
-        peer_id: PeerId,  // Buscar por peer_id en lugar de por id
+        peer_id: PeerId, // Buscar por peer_id en lugar de por id
     },
     PlayerReady {
-        peer_id: PeerId,  // Buscar por peer_id en lugar de por id
+        peer_id: PeerId, // Buscar por peer_id en lugar de por id
     },
 }
 
@@ -311,14 +315,11 @@ enum OutgoingMessage {
     /// Enviar a un peer específico por un canal específico
     ToOne {
         peer_id: PeerId,
-        channel: usize,  // 0 = reliable, 1 = unreliable
+        channel: usize, // 0 = reliable, 1 = unreliable
         data: Vec<u8>,
     },
     /// Enviar a todos los peers conectados
-    Broadcast {
-        channel: usize,
-        data: Vec<u8>,
-    },
+    Broadcast { channel: usize, data: Vec<u8> },
 }
 
 // ============================================================================
@@ -337,7 +338,10 @@ fn start_webrtc_server(
         .expect("No se pudo crear el runtime de Tokio");
 
     rt.block_on(async {
-        println!("🌐 Server connecting to matchbox at {}/game_server", signaling_url);
+        println!(
+            "🌐 Server connecting to matchbox at {}/game_server",
+            signaling_url
+        );
 
         // Crear WebRtcSocket y conectar a la room "game_server"
         let room_url = format!("{}/game_server", signaling_url);
@@ -384,14 +388,20 @@ fn start_webrtc_server(
             // Enviar mensajes salientes desde Bevy a los clientes
             while let Ok(outgoing) = outgoing_rx.try_recv() {
                 match outgoing {
-                    OutgoingMessage::ToOne { peer_id, channel, data } => {
+                    OutgoingMessage::ToOne {
+                        peer_id,
+                        channel,
+                        data,
+                    } => {
                         socket.channel_mut(channel).send(data.into(), peer_id);
                     }
                     OutgoingMessage::Broadcast { channel, data } => {
                         // Colectar peer_ids primero para evitar borrow conflict
                         let peers: Vec<_> = socket.connected_peers().collect();
                         for peer_id in peers {
-                            socket.channel_mut(channel).send(data.clone().into(), peer_id);
+                            socket
+                                .channel_mut(channel)
+                                .send(data.clone().into(), peer_id);
                         }
                     }
                 }
@@ -420,7 +430,10 @@ fn handle_control_message_typed(
     msg: ControlMessage,
 ) {
     match msg {
-        ControlMessage::Join { player_name, input_type } => {
+        ControlMessage::Join {
+            player_name,
+            input_type,
+        } => {
             let (id, config, map) = {
                 let mut s = state.lock().unwrap();
                 let id = s.next_player_id;
@@ -740,7 +753,8 @@ async fn handle_client(
     }
 }
 
-*/  // Fin del comentario de handle_client
+*/
+// Fin del comentario de handle_client
 
 fn update_input_manager(mut game_input: ResMut<GameInputManager>) {
     game_input.tick();
@@ -882,7 +896,7 @@ fn process_network_messages(
                     println!("📤 Enviando WELCOME a jugador {}", id);
                     let _ = network_tx.0.send(OutgoingMessage::ToOne {
                         peer_id,
-                        channel: 0,  // Canal reliable
+                        channel: 0, // Canal reliable
                         data,
                     });
                 }
@@ -927,7 +941,7 @@ fn process_network_messages(
                     kick_charging: false,
                     curve_charge: 0.0,
                     curve_charging: false,
-                    peer_id,  // Guardamos peer_id para enviar mensajes
+                    peer_id, // Guardamos peer_id para enviar mensajes
                     is_ready: false,
                     not_interacting: false,
                     is_sliding: false,
@@ -967,7 +981,10 @@ fn process_network_messages(
                 for (mut player, _) in players.iter_mut() {
                     if player.peer_id == peer_id {
                         player.is_ready = true;
-                        println!("✅ Jugador {} marcado como READY en el loop de juego", player.id);
+                        println!(
+                            "✅ Jugador {} marcado como READY en el loop de juego",
+                            player.id
+                        );
                         break;
                     }
                 }
@@ -1479,10 +1496,6 @@ fn dash_first_touch_ball(
             }
         }
 
-        if game_input.is_pressed(player.id, GameAction::StopInteract) {
-            continue;
-        }
-
         if game_input.is_pressed(player.id, GameAction::Slide) {
             if player.sprint_touch_cooldown <= 0.0 {
                 if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
@@ -1678,7 +1691,7 @@ fn broadcast_game_state(
             if player.is_ready {
                 let _ = network_tx.0.send(OutgoingMessage::ToOne {
                     peer_id: player.peer_id,
-                    channel: 1,  // Canal unreliable para GameState
+                    channel: 1, // Canal unreliable para GameState
                     data: data.clone(),
                 });
             }
