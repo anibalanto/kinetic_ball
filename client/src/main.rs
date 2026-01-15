@@ -1,18 +1,19 @@
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
-use shared::protocol::{ClientMessage, GameConfig, NetworkInputType, PlayerInput, ServerMessage};
+use shared::protocol::{
+    ControlMessage, GameConfig, GameDataMessage, NetworkInputType, PlayerInput, ServerMessage,
+};
+use matchbox_socket::{WebRtcSocket, PeerId, PeerState};
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio::sync::mpsc;
+use std::sync::mpsc;
 
 #[derive(Parser, Debug)]
 #[command(name = "Haxball Client")]
 #[command(about = "Cliente del juego Haxball", long_about = None)]
 struct Args {
-    /// Dirección del servidor (ej: localhost:9999 o 192.168.0.79:9999)
-    #[arg(short, long, default_value = "localhost:9999")]
+    /// URL del servidor de señalización matchbox (ej: ws://localhost:3536)
+    #[arg(short, long, default_value = "ws://127.0.0.1:3536")]
     server: String,
 
     /// Nombre del jugador
@@ -24,24 +25,24 @@ fn main() {
     let args = Args::parse();
     println!("🎮 Haxball Client - Iniciando...");
 
-    let (network_tx, network_rx) = mpsc::channel(10000);
-    let (input_tx, input_rx) = mpsc::channel::<shared::protocol::ClientMessage>(10000);
+    let (network_tx, network_rx) = mpsc::channel();
+    let (input_tx, input_rx) = mpsc::channel();
 
-    let server_addr = args.server.clone();
+    let server_url = args.server.clone();
     let player_name = args.name.clone();
 
-    // Hilo de red con Runtime dedicado
+    // Hilo de red con matchbox WebRTC
     std::thread::spawn(move || {
-        println!("🌐 [Red] Hilo iniciado");
+        println!("🌐 [Red] Iniciando cliente WebRTC");
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("Fallo al crear Runtime de Tokio");
 
         rt.block_on(async {
-            start_network_client(server_addr, player_name, network_tx, input_rx).await;
+            start_webrtc_client(server_url, player_name, network_tx, input_rx).await;
         });
-        println!("🌐 [Red] El hilo de red HA TERMINADO (start_network_client retornó)");
+        println!("🌐 [Red] El hilo de red HA TERMINADO");
     });
 
     // Bevy
@@ -104,7 +105,7 @@ fn main() {
 struct NetworkReceiver(Arc<Mutex<mpsc::Receiver<ServerMessage>>>);
 
 #[derive(Resource)]
-struct InputSender(mpsc::Sender<shared::protocol::ClientMessage>);
+struct InputSender(mpsc::Sender<PlayerInput>);
 
 #[derive(Resource)]
 struct MyPlayerId(Option<u32>);
@@ -170,9 +171,122 @@ struct PlayerSprite {
 }
 
 // ============================================================================
-// NETWORK CLIENT (Tokio)
+// NETWORK CLIENT (Matchbox WebRTC)
 // ============================================================================
 
+async fn start_webrtc_client(
+    signaling_url: String,
+    player_name: String,
+    network_tx: mpsc::Sender<ServerMessage>,
+    mut input_rx: mpsc::Receiver<PlayerInput>,
+) {
+    println!("🔌 [Red] Conectando a matchbox en {}/game_server", signaling_url);
+
+    // Crear WebRtcSocket y conectar a la room "game_server"
+    let room_url = format!("{}/game_server", signaling_url);
+    let (mut socket, loop_fut) = WebRtcSocket::builder(room_url)
+        .add_channel(matchbox_socket::ChannelConfig::reliable())   // Canal 0: Control
+        .add_channel(matchbox_socket::ChannelConfig::unreliable()) // Canal 1: GameData
+        .build();
+
+    // Spawn el loop de matchbox
+    tokio::spawn(loop_fut);
+
+    println!("✅ [Red] WebRTC socket creado, esperando conexión con el servidor...");
+
+    // Esperar a que se conecte al menos 1 peer (el servidor) y obtener su PeerId
+    let server_peer_id = loop {
+        socket.update_peers();
+        let mut peers = socket.connected_peers().collect::<Vec<_>>();
+        if !peers.is_empty() {
+            println!("🔗 [Red] Conectado al servidor!");
+            break peers[0];
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    };
+
+    // Enviar JOIN message
+    let join_msg = ControlMessage::Join {
+        player_name: player_name.clone(),
+        input_type: NetworkInputType::Keyboard,
+    };
+    if let Ok(data) = bincode::serialize(&join_msg) {
+        println!("📤 [Red -> Servidor] Enviando JOIN...");
+        socket.channel_mut(0).send(data.into(), server_peer_id); // Canal 0 = reliable
+    }
+
+    // Loop principal: recibir mensajes y enviar inputs
+    loop {
+        // Recibir mensajes del servidor
+        // Canal 0: Control messages (reliable)
+        for (_peer_id, packet) in socket.channel_mut(0).receive() {
+            if let Ok(msg) = bincode::deserialize::<ControlMessage>(&packet) {
+                match msg {
+                    ControlMessage::Welcome { player_id, game_config, map } => {
+                        println!("🎉 [Red] WELCOME recibido! Player ID: {}", player_id);
+                        // Convertir a ServerMessage para compatibilidad con el código existente
+                        let server_msg = ServerMessage::Welcome {
+                            player_id,
+                            game_config,
+                            map,
+                        };
+                        let _ = network_tx.send(server_msg);
+
+                        // Enviar READY inmediatamente
+                        let ready_msg = ControlMessage::Ready;
+                        if let Ok(data) = bincode::serialize(&ready_msg) {
+                            println!("📤 [Red -> Servidor] Enviando READY...");
+                            socket.channel_mut(0).send(data.into(), server_peer_id); // Canal 0 = reliable
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Canal 1: GameData messages (unreliable)
+        for (_peer_id, packet) in socket.channel_mut(1).receive() {
+            if let Ok(msg) = bincode::deserialize::<GameDataMessage>(&packet) {
+                match msg {
+                    GameDataMessage::GameState { tick, timestamp, players, ball } => {
+                        // Convertir a ServerMessage
+                        let server_msg = ServerMessage::GameState {
+                            tick,
+                            timestamp,
+                            players,
+                            ball,
+                        };
+                        let _ = network_tx.send(server_msg);
+                    }
+                    GameDataMessage::Pong { client_timestamp, server_timestamp } => {
+                        let server_msg = ServerMessage::Pong {
+                            client_timestamp,
+                            server_timestamp,
+                        };
+                        let _ = network_tx.send(server_msg);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Enviar inputs desde Bevy
+        while let Ok(input) = input_rx.try_recv() {
+            let input_msg = GameDataMessage::Input {
+                sequence: 0,
+                input,
+            };
+            if let Ok(data) = bincode::serialize(&input_msg) {
+                socket.channel_mut(1).send(data.into(), server_peer_id); // Canal 1 = unreliable
+            }
+        }
+
+        // Pequeña pausa
+        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+    }
+}
+
+/* CÓDIGO ANTIGUO DE TOKIO TCP - COMENTADO
 async fn start_network_client(
     addr: String,
     player_name_arg: String,
@@ -285,7 +399,7 @@ async fn start_network_client(
                         println!("📥 [Red <- Servidor] Mensaje recibido: {:?}", msg);
                     }
 
-                    if let Err(_) = network_tx.try_send(msg) {
+                    if let Err(_) = network_tx.send(msg) {
                         println!("⚠️ [Red] El canal de Bevy se ha cerrado");
                         break;
                     }
@@ -325,6 +439,8 @@ async fn enviar_input_packet(
         }
     }
 }
+*/  // Fin del comentario de funciones antiguas de red
+
 // ============================================================================
 // GAME SYSTEMS
 // ============================================================================
@@ -418,14 +534,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, input_sender: Res<Inpu
         DefaultFieldLine,
     ));
 
-    if let Err(e) = input_sender
-        .0
-        .try_send(shared::protocol::ClientMessage::Ready)
-    {
-        println!("⚠️ Error al enviar Ready desde Bevy: {:?}", e);
-    } else {
-        println!("🎮 Bevy e Intel Iris listos. Enviando READY al servidor...");
-    }
+    // El mensaje Ready ahora se envía automáticamente en el thread de red después de recibir Welcome
 
     println!("✅ Cliente configurado y campo listo");
 }
@@ -476,20 +585,12 @@ fn handle_input(
         slide: slide_detected,
     };
 
-    if input != previous_input.0 {
-        // --- LOG DE MOVIMIENTO DETECTADO ---
-        println!("🕹️ [Bevy] Cambio de input detectado. Enviando al hilo de red...");
-
-        let msg = shared::protocol::ClientMessage::Input {
-            sequence: 0,
-            input: input.clone(),
-        };
-
-        if let Err(e) = input_sender.0.try_send(msg) {
-            println!("⚠️ [Bevy] Error enviando input al canal: {:?}", e);
-        }
-        previous_input.0 = input;
+    // Enviamos input siempre, no solo cuando cambia (para mantener estado)
+    // El canal unreliable de WebRTC puede perder paquetes, así que enviamos constantemente
+    if let Err(e) = input_sender.0.send(input.clone()) {
+        println!("⚠️ [Bevy] Error enviando input al canal: {:?}", e);
     }
+    previous_input.0 = input;
 }
 
 fn process_network_messages(

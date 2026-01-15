@@ -14,7 +14,8 @@ shared = { path = "../shared", features = ["bevy"] }
 bevy = { workspace = true }
 bevy_rapier2d = { workspace = true, features = ["debug-render-2d"] }
 
-# Networking
+# Networking - Matchbox WebRTC
+matchbox_socket = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 bincode = { workspace = true }

@@ -19,7 +19,8 @@ bevy = { workspace = true, default-features = false, features = [
 ] }
 bevy_rapier2d = { workspace = true, features = ["simd-stable"] }
 
-# Networking
+# Networking - Matchbox WebRTC
+matchbox_socket = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 bincode = { workspace = true }

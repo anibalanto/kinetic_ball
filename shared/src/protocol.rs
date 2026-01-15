@@ -2,6 +2,58 @@ use crate::map::Map;
 use bevy::prelude::{Component, Vec2};
 use serde::{Deserialize, Serialize};
 
+// ============================================================================
+// NUEVOS MENSAJES PARA WEBRTC (Canales Separados)
+// ============================================================================
+
+/// Mensajes críticos que requieren entrega garantizada (Canal Reliable)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ControlMessage {
+    // Del cliente
+    Join {
+        player_name: String,
+        input_type: NetworkInputType,
+    },
+    Ready,
+
+    // Del servidor
+    Welcome {
+        player_id: u32,
+        game_config: GameConfig,
+        map: Option<Map>,
+    },
+    PlayerDisconnected {
+        player_id: u32,
+    },
+    Error {
+        message: String,
+    },
+}
+
+/// Mensajes de alta frecuencia que toleran pérdida (Canal Unreliable)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GameDataMessage {
+    // Del cliente
+    Input { sequence: u32, input: PlayerInput },
+    Ping { timestamp: u64 },
+
+    // Del servidor
+    GameState {
+        tick: u32,
+        timestamp: u64,
+        players: Vec<PlayerState>,
+        ball: BallState,
+    },
+    Pong {
+        client_timestamp: u64,
+        server_timestamp: u64,
+    },
+}
+
+// ============================================================================
+// MENSAJES ORIGINALES (Mantener por compatibilidad durante transición)
+// ============================================================================
+
 /// Mensajes que el cliente envía al servidor
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientMessage {
