@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
@@ -204,8 +205,11 @@ struct PlayerNameText;
 
 #[derive(Component)]
 struct PlayerSprite {
-    parent_id: u32, // ID del jugador padre
+    parent_id: u32,
 }
+
+#[derive(Component)]
+struct PlayerOutline;
 
 // ============================================================================
 // SISTEMAS DE MENÚ
@@ -627,6 +631,8 @@ fn process_network_messages(
     channels: Res<NetworkChannels>,
     mut my_id: ResMut<MyPlayerId>,
     mut loaded_map: ResMut<LoadedMap>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
     mut ball_q: Query<(&mut Interpolated, &mut Transform, &RemoteBall), Without<RemotePlayer>>,
     mut players_q: Query<
         (
@@ -782,11 +788,12 @@ fn process_network_messages(
                     ps.name, ps.id
                 );
 
-                // Generar un color basado en el ID (rápido y efectivo)
-                let r = ((ps.id * 123) % 255) as f32 / 255.0;
-                let g = ((ps.id * 456) % 255) as f32 / 255.0;
-                let b = ((ps.id * 789) % 255) as f32 / 255.0;
-                let player_color = Color::srgb(r, g, b);
+                // Color de equipo basado en ID (par = rojo, impar = azul)
+                let player_color = if ps.id % 2 == 0 {
+                    Color::srgb(0.9, 0.2, 0.2) // Equipo Rojo
+                } else {
+                    Color::srgb(0.2, 0.4, 0.9) // Equipo Azul
+                };
 
                 // Igual que RustBall: usar textura con children
                 commands
@@ -813,15 +820,25 @@ fn process_network_messages(
                         },
                     ))
                     .with_children(|parent| {
-                        // Sprite del jugador
+                        let radius = config.sphere_radius;
+                        let outline_thickness = 3.0;
+
+                        // Círculo de borde (outline) - negro, ligeramente más grande
                         parent.spawn((
-                            SpriteBundle {
-                                texture: asset_server.load("player.png"),
-                                sprite: Sprite {
-                                    color: player_color,
-                                    custom_size: Some(Vec2::splat(config.sphere_radius * 2.0)),
-                                    ..default()
-                                },
+                            MaterialMesh2dBundle {
+                                mesh: Mesh2dHandle(meshes.add(Circle::new(radius + outline_thickness))),
+                                material: materials.add(Color::BLACK),
+                                transform: Transform::from_xyz(0.0, 0.0, 0.5),
+                                ..default()
+                            },
+                            PlayerOutline,
+                        ));
+
+                        // Círculo principal (relleno) - color del jugador
+                        parent.spawn((
+                            MaterialMesh2dBundle {
+                                mesh: Mesh2dHandle(meshes.add(Circle::new(radius))),
+                                material: materials.add(player_color),
                                 transform: Transform::from_xyz(0.0, 0.0, 1.0),
                                 ..default()
                             },
@@ -1106,34 +1123,21 @@ fn update_dash_cooldown(
 
 fn update_player_sprite(
     player_query: Query<&RemotePlayer>,
-    mut sprite_query: Query<(&PlayerSprite, &mut Handle<Image>, &mut Sprite)>,
-    asset_server: Res<AssetServer>,
-    config: Res<GameConfig>,
+    sprite_query: Query<(&PlayerSprite, &Handle<ColorMaterial>)>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    for (player_sprite, mut texture, mut sprite) in sprite_query.iter_mut() {
+    for (player_sprite, material_handle) in sprite_query.iter() {
         // Buscamos al jugador padre para obtener su color base y estado
         if let Some(player) = player_query
             .iter()
             .find(|p| p.id == player_sprite.parent_id)
         {
-            // 1. Gestionar Textura según Slide
-            if player.is_sliding {
-                *texture = asset_server.load("player_slide.png");
-                sprite.custom_size = Some(Vec2::new(
-                    config.sphere_radius * 2.0,
-                    config.sphere_radius * 2.5,
-                ));
-            } else {
-                *texture = asset_server.load("player.png");
-                sprite.custom_size = Some(Vec2::splat(config.sphere_radius * 2.0));
-            }
-
-            // 2. APLICAR COLOR Y TRANSPARENCIA
-            // Si el modo stop_interact está activo, usamos alfa 0.3, si no 1.0
+            // Aplicar color y transparencia al material
             let alpha = if player.not_interacting { 0.3 } else { 1.0 };
 
-            // Aplicamos el color base que guardamos al spawnear con el nuevo alfa
-            sprite.color = player.base_color.with_alpha(alpha);
+            if let Some(material) = materials.get_mut(material_handle) {
+                material.color = player.base_color.with_alpha(alpha);
+            }
         }
     }
 }
