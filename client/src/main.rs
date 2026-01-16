@@ -89,6 +89,7 @@ fn main() {
                 adjust_field_for_map, // Ajusta campo y oculta líneas si hay mapa
                 render_map,           // Dibuja el mapa cargado del servidor
                 interpolate_entities, // Suaviza el movimiento entre posiciones de red
+                keep_name_horizontal, // Mantiene el nombre del jugador horizontal
                 camera_follow_player, // La cámara debe seguir al jugador cada frame
                 camera_zoom_control,  // Control de zoom con teclas numéricas
                 update_charge_bar,    // Actualiza la barra de carga de patada
@@ -171,6 +172,9 @@ struct KickChargeBarCurveRight;
 struct DashCooldown;
 
 #[derive(Component)]
+struct PlayerNameText;
+
+#[derive(Component)]
 struct PlayerSprite {
     parent_id: u32, // ID del jugador padre
 }
@@ -203,35 +207,33 @@ async fn start_webrtc_client(
 
     println!("✅ [Red] WebRTC socket creado, esperando conexión con peers...");
 
-    // Esperar a que se conecte al menos 1 peer
-    loop {
-        socket.update_peers();
-        let peers: Vec<_> = socket.connected_peers().collect();
-        if !peers.is_empty() {
-            println!("🔗 [Red] Conectado a {} peer(s)!", peers.len());
-            break;
-        }
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    }
-
-    // Enviar JOIN a TODOS los peers conectados (solo el servidor responderá con WELCOME)
-    let join_msg = ControlMessage::Join {
-        player_name: player_name.clone(),
-        input_type: NetworkInputType::Keyboard,
-    };
-    if let Ok(data) = bincode::serialize(&join_msg) {
-        let peers: Vec<_> = socket.connected_peers().collect();
-        println!("📤 [Red -> Servidor] Enviando JOIN a {} peer(s)...", peers.len());
-        for peer_id in peers {
-            socket.channel_mut(0).send(data.clone().into(), peer_id);
-        }
-    }
-
     // El server_peer_id real se determina cuando recibimos WELCOME
     let mut server_peer_id: Option<matchbox_socket::PeerId> = None;
 
+    // Rastrear a qué peers ya enviamos JOIN
+    let mut peers_joined: std::collections::HashSet<matchbox_socket::PeerId> =
+        std::collections::HashSet::new();
+
     // Loop principal: recibir mensajes y enviar inputs
     loop {
+        // Procesar nuevos peers y enviar JOIN a cada uno
+        socket.update_peers();
+        let current_peers: Vec<_> = socket.connected_peers().collect();
+
+        for peer_id in current_peers {
+            if !peers_joined.contains(&peer_id) {
+                // Nuevo peer, enviar JOIN
+                let join_msg = ControlMessage::Join {
+                    player_name: player_name.clone(),
+                    input_type: NetworkInputType::Keyboard,
+                };
+                if let Ok(data) = bincode::serialize(&join_msg) {
+                    println!("📤 [Red] Enviando JOIN a peer {:?}...", peer_id);
+                    socket.channel_mut(0).send(data.into(), peer_id);
+                    peers_joined.insert(peer_id);
+                }
+            }
+        }
         // Recibir mensajes del servidor
         // Canal 0: Control messages (reliable)
         for (peer_id, packet) in socket.channel_mut(0).receive() {
@@ -242,7 +244,10 @@ async fn start_webrtc_client(
                         game_config,
                         map,
                     } => {
-                        println!("🎉 [Red] WELCOME recibido de peer {:?}! Player ID: {}", peer_id, player_id);
+                        println!(
+                            "🎉 [Red] WELCOME recibido de peer {:?}! Player ID: {}",
+                            peer_id, player_id
+                        );
                         // Guardar el peer_id del servidor real
                         server_peer_id = Some(peer_id);
 
@@ -755,8 +760,42 @@ fn process_network_messages(
                                 ..default()
                             },
                         ));
+
+                        // Nombre del jugador debajo del sprite
+                        parent.spawn((
+                            PlayerNameText,
+                            Text2dBundle {
+                                text: Text::from_section(
+                                    ps.name.clone(),
+                                    TextStyle {
+                                        font_size: 16.0,
+                                        color: Color::WHITE,
+                                        ..default()
+                                    },
+                                ),
+                                transform: Transform::from_xyz(
+                                    -config.sphere_radius * 1.5,
+                                    0.0,
+                                    10.0,
+                                ),
+                                ..default()
+                            },
+                        ));
                     });
             }
+        }
+    }
+}
+
+// Sistema para mantener el nombre del jugador siempre horizontal (sin rotar)
+fn keep_name_horizontal(
+    mut name_query: Query<(&mut Transform, &Parent), With<PlayerNameText>>,
+    parent_query: Query<&Transform, (With<RemotePlayer>, Without<PlayerNameText>)>,
+) {
+    for (mut name_transform, parent) in name_query.iter_mut() {
+        if let Ok(parent_transform) = parent_query.get(parent.get()) {
+            // Contrarrestar la rotación del padre para que el texto quede horizontal
+            name_transform.rotation = parent_transform.rotation.inverse();
         }
     }
 }
