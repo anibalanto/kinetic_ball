@@ -97,16 +97,16 @@ fn main() {
         .add_systems(Update, menu_ui.run_if(in_state(AppState::Menu)))
         // Sistema de conexión (solo en estado Connecting)
         .add_systems(OnEnter(AppState::Connecting), start_connection)
-        .add_systems(Update, check_connection.run_if(in_state(AppState::Connecting)))
+        .add_systems(
+            Update,
+            check_connection.run_if(in_state(AppState::Connecting)),
+        )
         // Setup del juego (solo al entrar a InGame)
         .add_systems(OnEnter(AppState::InGame), setup)
         // Lógica de red y entrada (frecuencia fija, solo en InGame)
         .add_systems(
             FixedUpdate,
-            (
-                handle_input,
-                process_network_messages,
-            ).run_if(in_state(AppState::InGame)),
+            (handle_input, process_network_messages).run_if(in_state(AppState::InGame)),
         )
         // Lógica visual y renderizado (solo en InGame)
         .add_systems(
@@ -122,7 +122,8 @@ fn main() {
                 update_player_sprite,
                 update_target_ball_position,
                 update_dash_cooldown,
-            ).run_if(in_state(AppState::InGame)),
+            )
+                .run_if(in_state(AppState::InGame)),
         )
         .run();
 
@@ -216,10 +217,7 @@ struct PlayerOutline;
 // ============================================================================
 
 fn setup_menu_camera(mut commands: Commands) {
-    commands.spawn((
-        Camera2dBundle::default(),
-        MenuCamera,
-    ));
+    commands.spawn((Camera2dBundle::default(), MenuCamera));
 }
 
 fn menu_ui(
@@ -235,35 +233,46 @@ fn menu_ui(
             ui.add_space(40.0);
 
             // Contenedor para los campos
-            egui::Frame::none()
-                .inner_margin(20.0)
-                .show(ui, |ui| {
-                    ui.set_width(400.0);
+            egui::Frame::none().inner_margin(20.0).show(ui, |ui| {
+                ui.set_width(400.0);
 
-                    ui.horizontal(|ui| {
-                        ui.label("Servidor:");
-                        ui.add_sized([300.0, 24.0], egui::TextEdit::singleline(&mut config.server_url));
-                    });
-                    ui.add_space(10.0);
-
-                    ui.horizontal(|ui| {
-                        ui.label("Sala:");
-                        ui.add_sized([300.0, 24.0], egui::TextEdit::singleline(&mut config.room));
-                    });
-                    ui.add_space(10.0);
-
-                    ui.horizontal(|ui| {
-                        ui.label("Nombre:");
-                        ui.add_sized([300.0, 24.0], egui::TextEdit::singleline(&mut config.player_name));
-                    });
+                ui.horizontal(|ui| {
+                    ui.label("Servidor:");
+                    ui.add_sized(
+                        [300.0, 24.0],
+                        egui::TextEdit::singleline(&mut config.server_url),
+                    );
                 });
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Sala:");
+                    ui.add_sized([300.0, 24.0], egui::TextEdit::singleline(&mut config.room));
+                });
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Nombre:");
+                    ui.add_sized(
+                        [300.0, 24.0],
+                        egui::TextEdit::singleline(&mut config.player_name),
+                    );
+                });
+            });
 
             ui.add_space(30.0);
 
-            if ui.add_sized([200.0, 50.0], egui::Button::new(
-                egui::RichText::new("Conectar").size(20.0)
-            )).clicked() {
-                println!("🔌 Conectando a {} como {}", config.server_url, config.player_name);
+            if ui
+                .add_sized(
+                    [200.0, 50.0],
+                    egui::Button::new(egui::RichText::new("Conectar").size(20.0)),
+                )
+                .clicked()
+            {
+                println!(
+                    "🔌 Conectando a {} como {}",
+                    config.server_url, config.player_name
+                );
                 next_state.set(AppState::Connecting);
             }
         });
@@ -307,10 +316,7 @@ fn start_connection(
     });
 }
 
-fn check_connection(
-    channels: Res<NetworkChannels>,
-    mut next_state: ResMut<NextState<AppState>>,
-) {
+fn check_connection(channels: Res<NetworkChannels>, mut next_state: ResMut<NextState<AppState>>) {
     // Verificar si hemos recibido el WELCOME
     if let Some(ref receiver) = channels.receiver {
         if let Ok(rx) = receiver.lock() {
@@ -826,7 +832,9 @@ fn process_network_messages(
                         // Círculo de borde (outline) - negro, ligeramente más grande
                         parent.spawn((
                             MaterialMesh2dBundle {
-                                mesh: Mesh2dHandle(meshes.add(Circle::new(radius + outline_thickness))),
+                                mesh: Mesh2dHandle(
+                                    meshes.add(Circle::new(radius + outline_thickness)),
+                                ),
                                 material: materials.add(Color::BLACK),
                                 transform: Transform::from_xyz(0.0, 0.0, 0.5),
                                 ..default()
@@ -844,6 +852,38 @@ fn process_network_messages(
                             },
                             PlayerSprite { parent_id: ps.id },
                         ));
+
+                        // Indicador de dirección (cuadrado hacia adelante)
+                        let indicator_size = radius / 3.0;
+                        let indicator_distance = radius * 0.7;
+                        // 0 grados = eje X positivo (hacia la derecha/adelante)
+                        let indicator_x = indicator_distance;
+                        let indicator_y = 0.0;
+
+                        // Mesh personalizado: cuadrado con 4 vértices (LineStrip)
+                        let half = indicator_size / 2.0;
+                        let mut square_mesh = Mesh::new(
+                            bevy::render::mesh::PrimitiveTopology::LineStrip,
+                            bevy::render::render_asset::RenderAssetUsages::default(),
+                        );
+                        square_mesh.insert_attribute(
+                            Mesh::ATTRIBUTE_POSITION,
+                            vec![
+                                [-half, -half, 0.0], // esquina inferior izquierda
+                                [half, -half, 0.0],  // esquina inferior derecha
+                                [half, half, 0.0],   // esquina superior derecha
+                                [-half, half, 0.0],  // esquina superior izquierda
+                                [-half, -half, 0.0], // cerrar el cuadrado
+                            ],
+                        );
+
+                        parent.spawn(MaterialMesh2dBundle {
+                            mesh: Mesh2dHandle(meshes.add(square_mesh)),
+                            material: materials.add(Color::WHITE),
+                            transform: Transform::from_xyz(indicator_x, indicator_y, 1.5)
+                                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4)),
+                            ..default()
+                        });
 
                         // Barra de carga de patada
                         parent.spawn((
@@ -1021,23 +1061,23 @@ fn camera_zoom_control(
         let mut new_scale = None;
 
         // Teclas 1-9 para diferentes niveles de zoom
-        if keyboard.just_pressed(KeyCode::Digit1) {
+        if keyboard.just_pressed(KeyCode::Digit9) {
             new_scale = Some(0.5); // Muy cerca
-        } else if keyboard.just_pressed(KeyCode::Digit2) {
+        } else if keyboard.just_pressed(KeyCode::Digit8) {
             new_scale = Some(0.75);
-        } else if keyboard.just_pressed(KeyCode::Digit3) {
+        } else if keyboard.just_pressed(KeyCode::Digit7) {
             new_scale = Some(1.0); // Normal
-        } else if keyboard.just_pressed(KeyCode::Digit4) {
+        } else if keyboard.just_pressed(KeyCode::Digit6) {
             new_scale = Some(1.3);
         } else if keyboard.just_pressed(KeyCode::Digit5) {
             new_scale = Some(1.5);
-        } else if keyboard.just_pressed(KeyCode::Digit6) {
+        } else if keyboard.just_pressed(KeyCode::Digit4) {
             new_scale = Some(2.0); // Lejos
-        } else if keyboard.just_pressed(KeyCode::Digit7) {
+        } else if keyboard.just_pressed(KeyCode::Digit3) {
             new_scale = Some(2.5);
-        } else if keyboard.just_pressed(KeyCode::Digit8) {
+        } else if keyboard.just_pressed(KeyCode::Digit2) {
             new_scale = Some(3.0);
-        } else if keyboard.just_pressed(KeyCode::Digit9) {
+        } else if keyboard.just_pressed(KeyCode::Digit1) {
             new_scale = Some(4.0); // Muy lejos
         }
 
