@@ -201,34 +201,40 @@ async fn start_webrtc_client(
     // Spawn el loop de matchbox
     tokio::spawn(loop_fut);
 
-    println!("✅ [Red] WebRTC socket creado, esperando conexión con el servidor...");
+    println!("✅ [Red] WebRTC socket creado, esperando conexión con peers...");
 
-    // Esperar a que se conecte al menos 1 peer (el servidor) y obtener su PeerId
-    let server_peer_id = loop {
+    // Esperar a que se conecte al menos 1 peer
+    loop {
         socket.update_peers();
-        let mut peers = socket.connected_peers().collect::<Vec<_>>();
+        let peers: Vec<_> = socket.connected_peers().collect();
         if !peers.is_empty() {
-            println!("🔗 [Red] Conectado al servidor!");
-            break peers[0];
+            println!("🔗 [Red] Conectado a {} peer(s)!", peers.len());
+            break;
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    };
+    }
 
-    // Enviar JOIN message
+    // Enviar JOIN a TODOS los peers conectados (solo el servidor responderá con WELCOME)
     let join_msg = ControlMessage::Join {
         player_name: player_name.clone(),
         input_type: NetworkInputType::Keyboard,
     };
     if let Ok(data) = bincode::serialize(&join_msg) {
-        println!("📤 [Red -> Servidor] Enviando JOIN...");
-        socket.channel_mut(0).send(data.into(), server_peer_id); // Canal 0 = reliable
+        let peers: Vec<_> = socket.connected_peers().collect();
+        println!("📤 [Red -> Servidor] Enviando JOIN a {} peer(s)...", peers.len());
+        for peer_id in peers {
+            socket.channel_mut(0).send(data.clone().into(), peer_id);
+        }
     }
+
+    // El server_peer_id real se determina cuando recibimos WELCOME
+    let mut server_peer_id: Option<matchbox_socket::PeerId> = None;
 
     // Loop principal: recibir mensajes y enviar inputs
     loop {
         // Recibir mensajes del servidor
         // Canal 0: Control messages (reliable)
-        for (_peer_id, packet) in socket.channel_mut(0).receive() {
+        for (peer_id, packet) in socket.channel_mut(0).receive() {
             if let Ok(msg) = bincode::deserialize::<ControlMessage>(&packet) {
                 match msg {
                     ControlMessage::Welcome {
@@ -236,7 +242,10 @@ async fn start_webrtc_client(
                         game_config,
                         map,
                     } => {
-                        println!("🎉 [Red] WELCOME recibido! Player ID: {}", player_id);
+                        println!("🎉 [Red] WELCOME recibido de peer {:?}! Player ID: {}", peer_id, player_id);
+                        // Guardar el peer_id del servidor real
+                        server_peer_id = Some(peer_id);
+
                         // Convertir a ServerMessage para compatibilidad con el código existente
                         let server_msg = ServerMessage::Welcome {
                             player_id,
@@ -245,12 +254,11 @@ async fn start_webrtc_client(
                         };
                         let _ = network_tx.send(server_msg);
 
-                        // Enviar READY inmediatamente
+                        // Enviar READY al servidor real
                         let ready_msg = ControlMessage::Ready;
                         if let Ok(data) = bincode::serialize(&ready_msg) {
                             println!("📤 [Red -> Servidor] Enviando READY...");
-                            socket.channel_mut(0).send(data.into(), server_peer_id);
-                            // Canal 0 = reliable
+                            socket.channel_mut(0).send(data.into(), peer_id);
                         }
                     }
                     _ => {}
@@ -292,12 +300,17 @@ async fn start_webrtc_client(
             }
         }
 
-        // Enviar inputs desde Bevy
-        while let Ok(input) = input_rx.try_recv() {
-            let input_msg = GameDataMessage::Input { sequence: 0, input };
-            if let Ok(data) = bincode::serialize(&input_msg) {
-                socket.channel_mut(1).send(data.into(), server_peer_id); // Canal 1 = unreliable
+        // Enviar inputs desde Bevy (solo si ya identificamos al servidor)
+        if let Some(server_id) = server_peer_id {
+            while let Ok(input) = input_rx.try_recv() {
+                let input_msg = GameDataMessage::Input { sequence: 0, input };
+                if let Ok(data) = bincode::serialize(&input_msg) {
+                    socket.channel_mut(1).send(data.into(), server_id); // Canal 1 = unreliable
+                }
             }
+        } else {
+            // Descartar inputs hasta que tengamos servidor
+            while input_rx.try_recv().is_ok() {}
         }
 
         // Pequeña pausa
