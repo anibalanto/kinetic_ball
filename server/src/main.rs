@@ -1186,13 +1186,10 @@ fn kick_ball(
 
         let should_reset_kick = !any_kick_button && player.kick_charging;
 
-        let should_kick =
-            player.kick_charge > 0.0 && !game_input.is_pressed(player_id, GameAction::StopInteract);
-
         if should_reset_kick {
             player.kick_charging = false;
 
-            if should_kick {
+            if player.kick_charge > 0.0 {
                 // Chequear si este jugador soltó algún botón de patada
                 //let kick_released = game_input.just_released(player_id, GameAction::Kick);
                 let curve_left_released =
