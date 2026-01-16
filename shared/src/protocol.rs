@@ -95,6 +95,7 @@ pub struct PlayerInput {
     pub curve_right: bool,
     pub stop_interact: bool,
     pub sprint: bool,
+    pub dash: bool,
     pub slide: bool,
 }
 
@@ -143,7 +144,7 @@ pub struct PlayerState {
     pub is_sliding: bool,
     pub not_interacting: bool,
     pub ball_target_position: Option<Vec2>,
-    pub dash_cooldown: f32,
+    pub stamin_charge: f32,
 }
 
 /// Estado de la pelota
@@ -196,7 +197,10 @@ pub struct GameConfig {
     pub wall_restitution: f32,
 
     // Dash time
-    pub dash_cooldown_duration: f32,
+    pub stamin: f32,
+    pub dash_stamin_cost: f32,
+    pub slide_stamin_cost: f32,
+    pub run_stamin_coeficient_cost: f32,
 
     // Map loading
     #[serde(default)]
@@ -251,7 +255,10 @@ impl Default for GameConfig {
             wall_restitution: 0.8,
 
             //Dash time
-            dash_cooldown_duration: 2.0,
+            stamin: 1.0,
+            dash_stamin_cost: 0.9,
+            slide_stamin_cost: 0.6,
+            run_stamin_coeficient_cost: 0.2,
 
             // Map loading
             map_path: None,

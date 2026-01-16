@@ -1,3 +1,4 @@
+use bevy::math::VectorSpace;
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
@@ -155,8 +156,8 @@ fn main() {
             (
                 update_input_manager,
                 process_network_messages,
-                //detect_slide,
-                //execute_slide,
+                detect_slide,
+                execute_slide,
                 move_players,
                 handle_collision_player,
                 look_at_ball,
@@ -168,6 +169,7 @@ fn main() {
                 dash_first_touch_ball,
                 update_ball_damping,
                 broadcast_game_state,
+                recover_stamin,
             )
                 .chain(),
         )
@@ -266,11 +268,11 @@ struct Player {
     not_interacting: bool,
     // Barrida/Slide
     is_sliding: bool,
-    slide_timer: f32,
     slide_direction: Vec2,
-    slide_cooldown: f32,
+    slide_timer: f32,
+
     ball_target_position: Option<Vec2>,
-    sprint_touch_cooldown: f32,
+    stamin: f32,
 }
 
 // Marker component para la entidad física del jugador (igual que RustBall)
@@ -945,11 +947,10 @@ fn process_network_messages(
                     is_ready: false,
                     not_interacting: false,
                     is_sliding: false,
-                    slide_timer: 0.0,
                     slide_direction: Vec2::ZERO,
-                    slide_cooldown: 0.0,
+                    slide_timer: 0.0,
                     ball_target_position: None,
-                    sprint_touch_cooldown: 0.0,
+                    stamin: 1.0,
                 });
 
                 println!("✅ Jugador {} spawneado: {}", id, name);
@@ -1000,10 +1001,11 @@ fn process_network_messages(
 fn move_players(
     game_input: Res<GameInputManager>,
     config: Res<GameConfig>,
-    players: Query<&Player>,
+    mut players: Query<&mut Player>,
     mut sphere_query: Query<&mut Velocity, With<Sphere>>,
+    time: Res<Time>,
 ) {
-    for player in players.iter() {
+    for mut player in players.iter_mut() {
         // Si está en slide, no procesar input de movimiento
         if player.is_sliding {
             continue;
@@ -1030,14 +1032,17 @@ fn move_players(
             }
 
             if movement.length() > 0.0 {
-                // Reducir velocidad según el modo (igual que RustBall)
-                let speed_multiplier = if !game_input.is_pressed(player_id, GameAction::Sprint) {
-                    config.walk_coeficient
-                } else {
+                let run_tamin_cost = time.delta_seconds() * config.run_stamin_coeficient_cost;
+                let move_coeficient = if game_input.is_pressed(player_id, GameAction::Sprint)
+                    && player.stamin > run_tamin_cost
+                {
+                    player.stamin -= run_tamin_cost;
                     config.run_coeficient
+                } else {
+                    config.walk_coeficient
                 };
                 velocity.linvel =
-                    movement.normalize_or_zero() * config.player_speed * speed_multiplier;
+                    movement.normalize_or_zero() * config.player_speed * move_coeficient;
             } else {
                 velocity.linvel = Vec2::ZERO;
             }
@@ -1269,13 +1274,6 @@ fn look_at_ball(
 
                 if direction.length() > 0.0 {
                     let mut angle = direction.y.atan2(direction.x);
-                    let tilt_rad = 30.0f32.to_radians();
-
-                    /*if game_input.is_pressed(player.id, GameAction::CurveRight) {
-                        angle += tilt_rad;
-                    } else if game_input.is_pressed(player.id, GameAction::CurveLeft) {
-                        angle -= tilt_rad;
-                    }*/
 
                     sphere_transform.rotation = Quat::from_rotation_z(angle);
                 }
@@ -1395,32 +1393,28 @@ fn attract_ball(
 // Sistema de barrida: lee comando de slide del cliente y valida/ejecuta
 fn detect_slide(
     game_input: Res<GameInputManager>,
+    config: Res<GameConfig>,
     time: Res<Time>,
     mut player_query: Query<&mut Player>,
-    sphere_query: Query<&Velocity, With<Sphere>>,
+    sphere_query: Query<(&Velocity, &Transform), With<Sphere>>,
 ) {
     for mut player in player_query.iter_mut() {
         let player_id = player.id;
 
-        // Reducir cooldown
-        if player.slide_cooldown > 0.0 {
-            player.slide_cooldown -= time.delta_seconds();
-        }
-
         // Leer comando de slide desde el cliente
         if game_input.just_pressed(player_id, GameAction::Slide) {
-            // Validar: cooldown, no está ya deslizando
-            if player.slide_cooldown <= 0.0 && !player.is_sliding {
+            if config.slide_stamin_cost <= player.stamin && !player.is_sliding {
                 // Obtener dirección actual del movimiento
-                if let Ok(velocity) = sphere_query.get(player.sphere) {
+                if let Ok((velocity, transform)) = sphere_query.get(player.sphere) {
                     let current_vel = velocity.linvel;
 
                     // Solo permitir slide si se está moviendo
                     if current_vel.length() > 50.0 {
                         player.is_sliding = true;
-                        player.slide_timer = 0.5; // Duración de la barrida
-                        player.slide_direction = current_vel.normalize();
-                        player.slide_cooldown = 1.5; // 1.5 segundos de cooldown
+                        player.slide_timer = 0.3; // Duración de la barrida
+                        let (_, _, angle) = transform.rotation.to_euler(EulerRot::XYZ);
+                        player.slide_direction = Vec2::new(angle.cos(), angle.sin());
+                        player.stamin -= config.slide_stamin_cost; // 1.5 segundos de cooldown
 
                         println!(
                             "🏃 Jugador {} inicia barrida hacia {:?}",
@@ -1446,7 +1440,7 @@ fn execute_slide(
                 sphere_query.get_mut(player.sphere)
             {
                 // Aplicar velocidad fija en dirección del slide (doble de velocidad normal)
-                let slide_speed = config.player_speed * 2.0;
+                let slide_speed = config.player_speed * 1.5;
                 velocity.linvel = player.slide_direction * slide_speed;
 
                 // Cambiar forma a cápsula orientada en dirección del movimiento
@@ -1490,16 +1484,8 @@ fn dash_first_touch_ball(
     let activation_radius = config.sphere_radius + config.ball_radius + 50.0;
 
     for mut player in player_query.iter_mut() {
-        if player.sprint_touch_cooldown > 0.0 {
-            if game_input.is_pressed(player.id, GameAction::Sprint) {
-                player.sprint_touch_cooldown -= time.delta_seconds() / 2.0;
-            } else {
-                player.sprint_touch_cooldown -= time.delta_seconds();
-            }
-        }
-
-        if game_input.is_pressed(player.id, GameAction::Slide) {
-            if player.sprint_touch_cooldown <= 0.0 {
+        if game_input.is_pressed(player.id, GameAction::Dash) {
+            if config.dash_stamin_cost <= player.stamin {
                 if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
                     for (ball_transform, mut ball_velocity) in ball_query.iter_mut() {
                         let p_pos = player_transform.translation.truncate();
@@ -1552,7 +1538,7 @@ fn dash_first_touch_ball(
                                 ball_velocity.linvel = p_vel;
                             }
 
-                            player.sprint_touch_cooldown = config.dash_cooldown_duration;
+                            player.stamin -= config.dash_stamin_cost;
                             println!(
                                 "⚡ Sprint Touch ejecutado. Cooldown iniciado para jugador {}",
                                 player.id
@@ -1621,7 +1607,7 @@ fn broadcast_game_state(
                     is_sliding: player.is_sliding,
                     not_interacting: player.not_interacting,
                     ball_target_position: player.ball_target_position,
-                    dash_cooldown: player.sprint_touch_cooldown / config.dash_cooldown_duration,
+                    stamin_charge: player.stamin,
                 })
             } else {
                 println!(
@@ -1696,6 +1682,26 @@ fn broadcast_game_state(
                     channel: 1, // Canal unreliable para GameState
                     data: data.clone(),
                 });
+            }
+        }
+    }
+}
+
+fn recover_stamin(
+    config: Res<GameConfig>,
+    mut player_query: Query<&mut Player>,
+    sphere_query: Query<&Velocity, With<Sphere>>,
+    time: Res<Time>,
+) {
+    for mut player in player_query.iter_mut() {
+        if let Ok(velocity) = sphere_query.get(player.sphere) {
+            if player.stamin > 1.0 {
+                player.stamin = 1.0;
+            } else if player.stamin < 1.0 {
+                let speed = velocity.linvel.length();
+                if speed <= config.player_speed * config.walk_coeficient {
+                    player.stamin += time.delta_seconds() * config.run_stamin_coeficient_cost * 2.0;
+                }
             }
         }
     }

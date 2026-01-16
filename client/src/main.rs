@@ -1,12 +1,12 @@
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
+use matchbox_socket::{PeerId, PeerState, WebRtcSocket};
 use shared::protocol::{
     ControlMessage, GameConfig, GameDataMessage, NetworkInputType, PlayerInput, ServerMessage,
 };
-use matchbox_socket::{WebRtcSocket, PeerId, PeerState};
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 
 #[derive(Parser, Debug)]
 #[command(name = "Haxball Client")]
@@ -136,7 +136,7 @@ struct RemotePlayer {
     not_interacting: bool,
     base_color: Color,
     ball_target_position: Option<Vec2>,
-    dash_cooldown: f32,
+    stamin_charge: f32,
 }
 
 #[derive(Component)]
@@ -180,12 +180,15 @@ async fn start_webrtc_client(
     network_tx: mpsc::Sender<ServerMessage>,
     mut input_rx: mpsc::Receiver<PlayerInput>,
 ) {
-    println!("🔌 [Red] Conectando a matchbox en {}/game_server", signaling_url);
+    println!(
+        "🔌 [Red] Conectando a matchbox en {}/game_server",
+        signaling_url
+    );
 
     // Crear WebRtcSocket y conectar a la room "game_server"
     let room_url = format!("{}/game_server", signaling_url);
     let (mut socket, loop_fut) = WebRtcSocket::builder(room_url)
-        .add_channel(matchbox_socket::ChannelConfig::reliable())   // Canal 0: Control
+        .add_channel(matchbox_socket::ChannelConfig::reliable()) // Canal 0: Control
         .add_channel(matchbox_socket::ChannelConfig::unreliable()) // Canal 1: GameData
         .build();
 
@@ -222,7 +225,11 @@ async fn start_webrtc_client(
         for (_peer_id, packet) in socket.channel_mut(0).receive() {
             if let Ok(msg) = bincode::deserialize::<ControlMessage>(&packet) {
                 match msg {
-                    ControlMessage::Welcome { player_id, game_config, map } => {
+                    ControlMessage::Welcome {
+                        player_id,
+                        game_config,
+                        map,
+                    } => {
                         println!("🎉 [Red] WELCOME recibido! Player ID: {}", player_id);
                         // Convertir a ServerMessage para compatibilidad con el código existente
                         let server_msg = ServerMessage::Welcome {
@@ -236,7 +243,8 @@ async fn start_webrtc_client(
                         let ready_msg = ControlMessage::Ready;
                         if let Ok(data) = bincode::serialize(&ready_msg) {
                             println!("📤 [Red -> Servidor] Enviando READY...");
-                            socket.channel_mut(0).send(data.into(), server_peer_id); // Canal 0 = reliable
+                            socket.channel_mut(0).send(data.into(), server_peer_id);
+                            // Canal 0 = reliable
                         }
                     }
                     _ => {}
@@ -248,7 +256,12 @@ async fn start_webrtc_client(
         for (_peer_id, packet) in socket.channel_mut(1).receive() {
             if let Ok(msg) = bincode::deserialize::<GameDataMessage>(&packet) {
                 match msg {
-                    GameDataMessage::GameState { tick, timestamp, players, ball } => {
+                    GameDataMessage::GameState {
+                        tick,
+                        timestamp,
+                        players,
+                        ball,
+                    } => {
                         // Convertir a ServerMessage
                         let server_msg = ServerMessage::GameState {
                             tick,
@@ -258,7 +271,10 @@ async fn start_webrtc_client(
                         };
                         let _ = network_tx.send(server_msg);
                     }
-                    GameDataMessage::Pong { client_timestamp, server_timestamp } => {
+                    GameDataMessage::Pong {
+                        client_timestamp,
+                        server_timestamp,
+                    } => {
                         let server_msg = ServerMessage::Pong {
                             client_timestamp,
                             server_timestamp,
@@ -272,10 +288,7 @@ async fn start_webrtc_client(
 
         // Enviar inputs desde Bevy
         while let Ok(input) = input_rx.try_recv() {
-            let input_msg = GameDataMessage::Input {
-                sequence: 0,
-                input,
-            };
+            let input_msg = GameDataMessage::Input { sequence: 0, input };
             if let Ok(data) = bincode::serialize(&input_msg) {
                 socket.channel_mut(1).send(data.into(), server_peer_id); // Canal 1 = unreliable
             }
@@ -285,161 +298,6 @@ async fn start_webrtc_client(
         tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
     }
 }
-
-/* CÓDIGO ANTIGUO DE TOKIO TCP - COMENTADO
-async fn start_network_client(
-    addr: String,
-    player_name_arg: String,
-    network_tx: mpsc::Sender<ServerMessage>,
-    mut input_rx: mpsc::Receiver<shared::protocol::ClientMessage>,
-) {
-    println!("🔌 [Red] Intentando conectar al servidor en {}...", addr);
-    let socket = TcpStream::connect(addr).await.expect("Fallo al conectar");
-    let (mut read_half, mut write_half) = socket.into_split();
-    println!("✅ [Red] Conectado exitosamente");
-
-    // ==========================================
-    // FASE 1: HANDSHAKE SINCRÓNICO
-    // ==========================================
-
-    // 1. Enviar JOIN
-    let join_msg = ClientMessage::Join {
-        player_name: player_name_arg.clone(),
-        input_type: NetworkInputType::Keyboard,
-    };
-    if let Ok(data) = bincode::serialize(&join_msg) {
-        println!("📤 [Red -> Servidor] Enviando JOIN...");
-        write_half
-            .write_all(&(data.len() as u32).to_le_bytes())
-            .await
-            .unwrap();
-        write_half.write_all(&data).await.unwrap();
-    }
-
-    // 2. Leer WELCOME del servidor (bloqueante, pero está bien aquí)
-    let mut len_buf = [0u8; 4];
-    read_half
-        .read_exact(&mut len_buf)
-        .await
-        .expect("Error leyendo Welcome");
-    let len = u32::from_le_bytes(len_buf) as usize;
-
-    let mut buffer = vec![0u8; len];
-    read_half
-        .read_exact(&mut buffer)
-        .await
-        .expect("Error leyendo datos Welcome");
-
-    match bincode::deserialize::<ServerMessage>(&buffer) {
-        Ok(ServerMessage::Welcome {
-            player_id,
-            game_config,
-            map,
-        }) => {
-            println!("🎉 [Red] WELCOME recibido! Player ID: {}", player_id);
-            // Enviar el Welcome a Bevy
-            let _ = network_tx
-                .send(ServerMessage::Welcome {
-                    player_id,
-                    game_config,
-                    map,
-                })
-                .await;
-        }
-        _ => panic!("Se esperaba Welcome pero se recibió otro mensaje"),
-    }
-
-    // 3. Enviar READY inmediatamente después de recibir Welcome
-    let ready_msg = ClientMessage::Ready;
-    if let Ok(data) = bincode::serialize(&ready_msg) {
-        println!("📤 [Red -> Servidor] Enviando READY...");
-        write_half
-            .write_all(&(data.len() as u32).to_le_bytes())
-            .await
-            .unwrap();
-        write_half.write_all(&data).await.unwrap();
-    }
-
-    println!("✅ [Red] Handshake completo. Iniciando comunicación bidireccional...");
-
-    // ==========================================
-    // FASE 2: COMUNICACIÓN BIDIRECCIONAL
-    // ==========================================
-
-    // Task de envío de inputs (ya no necesita lógica de handshake)
-    tokio::spawn(async move {
-        while let Some(input) = input_rx.recv().await {
-            enviar_input_packet(&mut write_half, input).await;
-        }
-    });
-
-    // Loop de recepción (este ya lo tenías)
-    let mut buffer = vec![0u8; 65536];
-    loop {
-        let mut len_buf = [0u8; 4];
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(20),
-            read_half.read_exact(&mut len_buf),
-        )
-        .await
-        {
-            Ok(Ok(_)) => {
-                let len = u32::from_le_bytes(len_buf) as usize;
-                if len > buffer.len() {
-                    buffer.resize(len, 0);
-                }
-                if let Err(e) = read_half.read_exact(&mut buffer[..len]).await {
-                    println!("❌ [Red] Error leyendo datos del servidor: {:?}", e);
-                    break;
-                }
-
-                if let Ok(msg) = bincode::deserialize::<ServerMessage>(&buffer[..len]) {
-                    // Log para mensajes que no sean GameState (para no llenar la consola)
-                    if !matches!(msg, ServerMessage::GameState { .. }) {
-                        println!("📥 [Red <- Servidor] Mensaje recibido: {:?}", msg);
-                    }
-
-                    if let Err(_) = network_tx.send(msg) {
-                        println!("⚠️ [Red] El canal de Bevy se ha cerrado");
-                        break;
-                    }
-                }
-            }
-            _ => {
-                println!("🔌 [Red] Timeout o error de conexión (20s sin datos)");
-                break;
-            }
-        }
-    }
-}
-
-// Antes: ...input: PlayerInput
-async fn enviar_input_packet(
-    write: &mut tokio::net::tcp::OwnedWriteHalf,
-    msg: shared::protocol::ClientMessage,
-) {
-    use tokio::io::AsyncWriteExt;
-
-    if let Ok(data) = bincode::serialize(&msg) {
-        // 1. Enviar longitud (u32, 4 bytes)
-        let len = data.len() as u32;
-        if let Err(e) = write.write_all(&len.to_le_bytes()).await {
-            eprintln!("❌ Error enviando longitud: {}", e);
-            return;
-        }
-
-        // 2. Enviar datos
-        if let Err(e) = write.write_all(&data).await {
-            eprintln!("❌ Error enviando datos: {}", e);
-        }
-
-        // Log opcional para verificar en el cliente
-        if matches!(msg, ClientMessage::Input { .. }) {
-            // println!("🕹️ [Cliente] Input enviado al servidor ({} bytes)", data.len());
-        }
-    }
-}
-*/  // Fin del comentario de funciones antiguas de red
 
 // ============================================================================
 // GAME SYSTEMS
@@ -558,13 +416,13 @@ fn handle_input(
     // Detectar doble tap de Space
     let current_time = time.elapsed_seconds();
     let double_tap_window = 0.3; // 300ms para doble tap
-    let mut slide_detected = false;
+    let mut dash_detected = false;
 
     if keyboard.just_pressed(KeyCode::Space) {
         let time_since_last = current_time - double_tap.last_space_press;
 
         if time_since_last < double_tap_window {
-            slide_detected = true;
+            dash_detected = true;
             println!("🏃 [Cliente] Doble tap detectado! Enviando slide=true");
         }
 
@@ -582,7 +440,8 @@ fn handle_input(
         curve_right: keyboard.pressed(KeyCode::KeyA),
         stop_interact: keyboard.pressed(KeyCode::ShiftLeft),
         sprint: keyboard.pressed(KeyCode::Space),
-        slide: slide_detected,
+        dash: dash_detected,
+        slide: keyboard.pressed(KeyCode::ControlLeft),
     };
 
     // Enviamos input siempre, no solo cuando cambia (para mantener estado)
@@ -729,7 +588,7 @@ fn process_network_messages(
                     rp.kick_charge = ps.kick_charge;
                     rp.is_sliding = ps.is_sliding;
                     rp.ball_target_position = ps.ball_target_position;
-                    rp.dash_cooldown = ps.dash_cooldown;
+                    rp.stamin_charge = ps.stamin_charge;
 
                     // Actualizar collider según estado de slide
                     if ps.is_sliding {
@@ -772,7 +631,7 @@ fn process_network_messages(
                             not_interacting: ps.not_interacting,
                             base_color: player_color,
                             ball_target_position: ps.ball_target_position,
-                            dash_cooldown: ps.dash_cooldown,
+                            stamin_charge: ps.stamin_charge,
                         },
                         Collider::ball(config.sphere_radius), // Para debug rendering
                         Interpolated {
@@ -1030,8 +889,10 @@ fn update_dash_cooldown(
             if let Ok(mut sprite) = sprite_query.get_mut(child) {
                 // 1. Caso: Barra Principal
                 if bar_main_q.contains(child) {
-                    sprite.custom_size = Some(Vec2::new(max_width * player.dash_cooldown, 5.0));
-                    sprite.color = Color::srgb(1.0 - player.dash_cooldown, 1.0, 0.0);
+                    sprite.custom_size = Some(Vec2::new(max_width * player.stamin_charge, 5.0));
+
+                    sprite.color =
+                        Color::srgb(1.0, 0.5 * player.stamin_charge, player.stamin_charge);
                 }
             }
         }
