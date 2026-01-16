@@ -1,14 +1,15 @@
 use bevy::prelude::*;
+use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
-use matchbox_socket::{PeerId, PeerState, WebRtcSocket};
+use matchbox_socket::WebRtcSocket;
 use shared::protocol::{
     ControlMessage, GameConfig, GameDataMessage, NetworkInputType, PlayerInput, ServerMessage,
 };
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "Haxball Client")]
 #[command(about = "Cliente del juego Haxball", long_about = None)]
 struct Args {
@@ -25,78 +26,102 @@ struct Args {
     name: String,
 }
 
+// ============================================================================
+// ESTADOS DE LA APLICACIÓN
+// ============================================================================
+
+#[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
+enum AppState {
+    #[default]
+    Menu,
+    Connecting,
+    InGame,
+}
+
+// ============================================================================
+// CONFIGURACIÓN DE CONEXIÓN (valores editables en el menú)
+// ============================================================================
+
+#[derive(Resource)]
+struct ConnectionConfig {
+    server_url: String,
+    room: String,
+    player_name: String,
+}
+
+impl ConnectionConfig {
+    fn from_args(args: &Args) -> Self {
+        Self {
+            server_url: args.server.clone(),
+            room: args.room.clone(),
+            player_name: args.name.clone(),
+        }
+    }
+}
+
 fn main() {
     let args = Args::parse();
     println!("🎮 Haxball Client - Iniciando...");
-
-    let (network_tx, network_rx) = mpsc::channel();
-    let (input_tx, input_rx) = mpsc::channel();
-
-    let server_url = args.server.clone();
-    let room = args.room.clone();
-    let player_name = args.name.clone();
-
-    // Hilo de red con matchbox WebRTC
-    std::thread::spawn(move || {
-        println!("🌐 [Red] Iniciando cliente WebRTC");
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("Fallo al crear Runtime de Tokio");
-
-        rt.block_on(async {
-            start_webrtc_client(server_url, room, player_name, network_tx, input_rx).await;
-        });
-        println!("🌐 [Red] El hilo de red HA TERMINADO");
-    });
 
     // Bevy
     println!("🎨 [Bevy] Intentando abrir ventana...");
     App::new()
         .insert_resource(bevy::winit::WinitSettings::game())
-        .insert_resource(ClearColor(Color::srgb(0.2, 0.5, 0.2))) // Fondo verde para evitar el gris
+        .insert_resource(ClearColor(Color::srgb(0.1, 0.1, 0.15)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: format!("Haxball - {}", args.name),
+                title: "RustBall".to_string(),
                 resolution: (1280.0, 720.0).into(),
                 ..default()
             }),
             ..default()
         }))
+        .add_plugins(EguiPlugin)
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
+        // Estado de la aplicación
+        .init_state::<AppState>()
+        // Configuración de conexión (valores iniciales desde args)
+        .insert_resource(ConnectionConfig::from_args(&args))
+        // Recursos del juego (se inicializan vacíos, se llenan al conectar)
         .insert_resource(GameConfig::default())
-        .insert_resource(NetworkReceiver(Arc::new(Mutex::new(network_rx))))
-        .insert_resource(InputSender(input_tx))
+        .insert_resource(NetworkChannels::default())
         .insert_resource(MyPlayerId(None))
         .insert_resource(LoadedMap::default())
         .insert_resource(PreviousInput::default())
         .insert_resource(DoubleTapTracker {
             last_space_press: -999.0,
         })
-        .add_systems(Startup, setup)
-        // Lógica de red y entrada (frecuencia fija)
+        // Sistemas de menú (solo en estado Menu)
+        .add_systems(OnEnter(AppState::Menu), setup_menu_camera)
+        .add_systems(Update, menu_ui.run_if(in_state(AppState::Menu)))
+        // Sistema de conexión (solo en estado Connecting)
+        .add_systems(OnEnter(AppState::Connecting), start_connection)
+        .add_systems(Update, check_connection.run_if(in_state(AppState::Connecting)))
+        // Setup del juego (solo al entrar a InGame)
+        .add_systems(OnEnter(AppState::InGame), setup)
+        // Lógica de red y entrada (frecuencia fija, solo en InGame)
         .add_systems(
             FixedUpdate,
             (
-                handle_input,             // Enviamos inputs al ritmo del tickrate
-                process_network_messages, // Procesamos paquetes llegados
-            ),
+                handle_input,
+                process_network_messages,
+            ).run_if(in_state(AppState::InGame)),
         )
-        // Lógica visual y renderizado (frecuencia del monitor)
+        // Lógica visual y renderizado (solo en InGame)
         .add_systems(
             Update,
             (
-                adjust_field_for_map, // Ajusta campo y oculta líneas si hay mapa
-                render_map,           // Dibuja el mapa cargado del servidor
-                interpolate_entities, // Suaviza el movimiento entre posiciones de red
-                keep_name_horizontal, // Mantiene el nombre del jugador horizontal
-                camera_follow_player, // La cámara debe seguir al jugador cada frame
-                camera_zoom_control,  // Control de zoom con teclas numéricas
-                update_charge_bar,    // Actualiza la barra de carga de patada
-                update_player_sprite, // Cambia sprite según estado de slide
+                adjust_field_for_map,
+                render_map,
+                interpolate_entities,
+                keep_name_horizontal,
+                camera_follow_player,
+                camera_zoom_control,
+                update_charge_bar,
+                update_player_sprite,
                 update_target_ball_position,
                 update_dash_cooldown,
-            ),
+            ).run_if(in_state(AppState::InGame)),
         )
         .run();
 
@@ -107,11 +132,11 @@ fn main() {
 // RECURSOS
 // ============================================================================
 
-#[derive(Resource)]
-struct NetworkReceiver(Arc<Mutex<mpsc::Receiver<ServerMessage>>>);
-
-#[derive(Resource)]
-struct InputSender(mpsc::Sender<PlayerInput>);
+#[derive(Resource, Default)]
+struct NetworkChannels {
+    receiver: Option<Arc<Mutex<mpsc::Receiver<ServerMessage>>>>,
+    sender: Option<mpsc::Sender<PlayerInput>>,
+}
 
 #[derive(Resource)]
 struct MyPlayerId(Option<u32>);
@@ -129,6 +154,9 @@ struct DefaultFieldLine;
 
 #[derive(Component)]
 struct FieldBackground;
+
+#[derive(Component)]
+struct MenuCamera;
 
 // ============================================================================
 // COMPONENTES
@@ -177,6 +205,118 @@ struct PlayerNameText;
 #[derive(Component)]
 struct PlayerSprite {
     parent_id: u32, // ID del jugador padre
+}
+
+// ============================================================================
+// SISTEMAS DE MENÚ
+// ============================================================================
+
+fn setup_menu_camera(mut commands: Commands) {
+    commands.spawn((
+        Camera2dBundle::default(),
+        MenuCamera,
+    ));
+}
+
+fn menu_ui(
+    mut contexts: EguiContexts,
+    mut config: ResMut<ConnectionConfig>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    egui::CentralPanel::default().show(contexts.ctx_mut(), |ui| {
+        ui.vertical_centered(|ui| {
+            ui.add_space(100.0);
+
+            ui.heading(egui::RichText::new("🏈 RustBall").size(48.0));
+            ui.add_space(40.0);
+
+            // Contenedor para los campos
+            egui::Frame::none()
+                .inner_margin(20.0)
+                .show(ui, |ui| {
+                    ui.set_width(400.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Servidor:");
+                        ui.add_sized([300.0, 24.0], egui::TextEdit::singleline(&mut config.server_url));
+                    });
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Sala:");
+                        ui.add_sized([300.0, 24.0], egui::TextEdit::singleline(&mut config.room));
+                    });
+                    ui.add_space(10.0);
+
+                    ui.horizontal(|ui| {
+                        ui.label("Nombre:");
+                        ui.add_sized([300.0, 24.0], egui::TextEdit::singleline(&mut config.player_name));
+                    });
+                });
+
+            ui.add_space(30.0);
+
+            if ui.add_sized([200.0, 50.0], egui::Button::new(
+                egui::RichText::new("Conectar").size(20.0)
+            )).clicked() {
+                println!("🔌 Conectando a {} como {}", config.server_url, config.player_name);
+                next_state.set(AppState::Connecting);
+            }
+        });
+    });
+}
+
+fn start_connection(
+    mut commands: Commands,
+    config: Res<ConnectionConfig>,
+    mut channels: ResMut<NetworkChannels>,
+    menu_camera: Query<Entity, With<MenuCamera>>,
+) {
+    // Despawnear la cámara del menú
+    for entity in menu_camera.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    let (network_tx, network_rx) = mpsc::channel();
+    let (input_tx, input_rx) = mpsc::channel();
+
+    // Guardar los canales
+    channels.receiver = Some(Arc::new(Mutex::new(network_rx)));
+    channels.sender = Some(input_tx);
+
+    let server_url = config.server_url.clone();
+    let room = config.room.clone();
+    let player_name = config.player_name.clone();
+
+    // Iniciar hilo de red
+    std::thread::spawn(move || {
+        println!("🌐 [Red] Iniciando cliente WebRTC");
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Fallo al crear Runtime de Tokio");
+
+        rt.block_on(async {
+            start_webrtc_client(server_url, room, player_name, network_tx, input_rx).await;
+        });
+        println!("🌐 [Red] El hilo de red HA TERMINADO");
+    });
+}
+
+fn check_connection(
+    channels: Res<NetworkChannels>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    // Verificar si hemos recibido el WELCOME
+    if let Some(ref receiver) = channels.receiver {
+        if let Ok(rx) = receiver.lock() {
+            // Peek sin consumir - si hay mensajes, la conexión está lista
+            // En realidad, simplemente pasamos a InGame y dejamos que process_network_messages maneje los mensajes
+            drop(rx);
+            // Por simplicidad, pasamos directamente a InGame después de un frame
+            next_state.set(AppState::InGame);
+        }
+    }
 }
 
 // ============================================================================
@@ -327,7 +467,7 @@ async fn start_webrtc_client(
 // GAME SYSTEMS
 // ============================================================================
 
-fn setup(mut commands: Commands, config: Res<GameConfig>, input_sender: Res<InputSender>) {
+fn setup(mut commands: Commands, config: Res<GameConfig>) {
     // Cámara con zoom ajustado para mejor visualización del mapa
     commands.spawn((
         Camera2dBundle {
@@ -427,7 +567,7 @@ struct PreviousInput(PlayerInput);
 
 fn handle_input(
     keyboard: Res<ButtonInput<KeyCode>>,
-    input_sender: Res<InputSender>,
+    channels: Res<NetworkChannels>,
     my_player_id: Res<MyPlayerId>,
     mut previous_input: ResMut<PreviousInput>,
     mut double_tap: ResMut<DoubleTapTracker>,
@@ -436,6 +576,10 @@ fn handle_input(
     if my_player_id.0.is_none() {
         return;
     }
+
+    let Some(ref sender) = channels.sender else {
+        return;
+    };
 
     // Detectar doble tap de Space
     let current_time = time.elapsed_seconds();
@@ -470,7 +614,7 @@ fn handle_input(
 
     // Enviamos input siempre, no solo cuando cambia (para mantener estado)
     // El canal unreliable de WebRTC puede perder paquetes, así que enviamos constantemente
-    if let Err(e) = input_sender.0.send(input.clone()) {
+    if let Err(e) = sender.send(input.clone()) {
         println!("⚠️ [Bevy] Error enviando input al canal: {:?}", e);
     }
     previous_input.0 = input;
@@ -480,7 +624,7 @@ fn process_network_messages(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     config: Res<GameConfig>,
-    network_rx: Res<NetworkReceiver>,
+    channels: Res<NetworkChannels>,
     mut my_id: ResMut<MyPlayerId>,
     mut loaded_map: ResMut<LoadedMap>,
     mut ball_q: Query<(&mut Interpolated, &mut Transform, &RemoteBall), Without<RemotePlayer>>,
@@ -494,7 +638,10 @@ fn process_network_messages(
         (Without<RemoteBall>, Without<MainCamera>),
     >,
 ) {
-    let mut rx = network_rx.0.lock().unwrap();
+    let Some(ref receiver) = channels.receiver else {
+        return;
+    };
+    let mut rx = receiver.lock().unwrap();
     let mut spawned_this_frame = std::collections::HashSet::new();
 
     // Procesar solo el último GameState si hay múltiples
