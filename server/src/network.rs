@@ -1,0 +1,413 @@
+use bevy::prelude::*;
+use bevy_rapier2d::prelude::*;
+use matchbox_socket::{PeerId, PeerState, WebRtcSocket};
+use shared::*;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
+
+use crate::{
+    Ball, BroadcastTimer, GameInputManager, GameTick, LoadedMap, NetworkEvent, NetworkReceiver,
+    NetworkSender, NetworkState, OutgoingMessage, Player, Sphere,
+};
+
+// ============================================================================
+// NETWORK SERVER - MATCHBOX WEBRTC
+// ============================================================================
+
+pub fn start_webrtc_server(
+    event_tx: mpsc::Sender<NetworkEvent>,
+    state: Arc<Mutex<NetworkState>>,
+    signaling_url: String,
+    room: String,
+    outgoing_rx: mpsc::Receiver<OutgoingMessage>,
+) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("No se pudo crear el runtime de Tokio");
+
+    rt.block_on(async {
+        println!(
+            "🌐 Server connecting to matchbox at {}/{}",
+            signaling_url, room
+        );
+
+        // Crear WebRtcSocket y conectar a la room
+        let room_url = format!("{}/{}", signaling_url, room);
+        let (mut socket, loop_fut) = WebRtcSocket::builder(room_url)
+            .add_channel(matchbox_socket::ChannelConfig::reliable()) // Canal 0: Control (reliable)
+            .add_channel(matchbox_socket::ChannelConfig::unreliable()) // Canal 1: GameData (unreliable)
+            .build();
+
+        // Spawn el loop de matchbox (maneja la señalización)
+        tokio::spawn(loop_fut);
+
+        println!("✅ Server WebRTC socket ready, waiting for peers...");
+
+        // Loop principal: manejar eventos de peers y mensajes
+        loop {
+            // Procesar eventos de conexión/desconexión de peers
+            for (peer_id, peer_state) in socket.update_peers() {
+                match peer_state {
+                    PeerState::Connected => {
+                        println!("🔗 Peer connected: {:?}", peer_id);
+                        // No asignamos player_id aquí, esperamos el mensaje JOIN
+                    }
+                    PeerState::Disconnected => {
+                        println!("🔌 Peer disconnected: {:?}", peer_id);
+                        let _ = event_tx.send(NetworkEvent::PlayerDisconnected { peer_id });
+                    }
+                }
+            }
+
+            // Recibir mensajes del canal 0 (reliable - control)
+            for (peer_id, packet) in socket.channel_mut(0).receive() {
+                if let Ok(msg) = bincode::deserialize::<ControlMessage>(&packet) {
+                    handle_control_message_typed(&event_tx, &state, peer_id, msg);
+                }
+            }
+
+            // Recibir mensajes del canal 1 (unreliable - game data)
+            for (peer_id, packet) in socket.channel_mut(1).receive() {
+                if let Ok(msg) = bincode::deserialize::<GameDataMessage>(&packet) {
+                    handle_game_data_message_typed(&event_tx, peer_id, msg);
+                }
+            }
+
+            // Enviar mensajes salientes desde Bevy a los clientes
+            while let Ok(outgoing) = outgoing_rx.try_recv() {
+                match outgoing {
+                    OutgoingMessage::ToOne {
+                        peer_id,
+                        channel,
+                        data,
+                    } => {
+                        socket.channel_mut(channel).send(data.into(), peer_id);
+                    }
+                    OutgoingMessage::Broadcast { channel, data } => {
+                        // Colectar peer_ids primero para evitar borrow conflict
+                        let peers: Vec<_> = socket.connected_peers().collect();
+                        for peer_id in peers {
+                            socket
+                                .channel_mut(channel)
+                                .send(data.clone().into(), peer_id);
+                        }
+                    }
+                }
+            }
+
+            // Pequeña pausa para no saturar el CPU
+            tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
+        }
+    });
+}
+
+pub fn peer_id_to_u32(peer_id: PeerId) -> u32 {
+    // Convertir PeerId (UUID) a u32 usando hash
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    peer_id.hash(&mut hasher);
+    hasher.finish() as u32
+}
+
+pub fn handle_control_message_typed(
+    event_tx: &mpsc::Sender<NetworkEvent>,
+    state: &Arc<Mutex<NetworkState>>,
+    peer_id: PeerId,
+    msg: ControlMessage,
+) {
+    match msg {
+        ControlMessage::Join {
+            player_name,
+            input_type,
+        } => {
+            let (id, config, map) = {
+                let mut s = state.lock().unwrap();
+                let id = s.next_player_id;
+                s.next_player_id += 1;
+                (id, s.game_config.clone(), s.map.clone())
+            };
+
+            println!("🎮 Player {} joined: {}", id, player_name);
+
+            // Enviar Welcome de vuelta (esto lo maneja broadcast_game_state por ahora)
+            // TODO: Implementar envío directo de Welcome a este peer
+
+            let _ = event_tx.send(NetworkEvent::NewPlayer {
+                id,
+                name: player_name,
+                peer_id,
+            });
+        }
+        ControlMessage::Ready => {
+            println!("✅ Player with peer_id {:?} ready", peer_id);
+            let _ = event_tx.send(NetworkEvent::PlayerReady { peer_id });
+        }
+        _ => {
+            // Otros mensajes de control del servidor no deberían venir del cliente
+        }
+    }
+}
+
+pub fn handle_game_data_message_typed(
+    event_tx: &mpsc::Sender<NetworkEvent>,
+    peer_id: PeerId,
+    msg: GameDataMessage,
+) {
+    match msg {
+        GameDataMessage::Input { sequence, input } => {
+            let _ = event_tx.send(NetworkEvent::PlayerInput { peer_id, input });
+        }
+        GameDataMessage::Ping { timestamp } => {
+            // TODO: Responder con Pong
+        }
+        _ => {
+            // Otros mensajes del servidor no deberían venir del cliente
+        }
+    }
+}
+
+pub fn update_input_manager(mut game_input: ResMut<GameInputManager>) {
+    game_input.tick();
+}
+
+pub fn process_network_messages(
+    mut commands: Commands,
+    mut network_rx: ResMut<NetworkReceiver>,
+    network_tx: Res<NetworkSender>,
+    config: Res<GameConfig>,
+    loaded_map: Res<LoadedMap>,
+    mut game_input: ResMut<GameInputManager>,
+    mut players: Query<(&mut Player, Entity)>,
+) {
+    while let Ok(event) = network_rx.0.lock().unwrap().try_recv() {
+        match event {
+            NetworkEvent::NewPlayer { id, name, peer_id } => {
+                // Agregar jugador al GameInputManager
+                game_input.add_player(id);
+
+                // Enviar WELCOME al nuevo jugador
+                let welcome_msg = ControlMessage::Welcome {
+                    player_id: id,
+                    game_config: config.clone(),
+                    map: loaded_map.0.clone(),
+                };
+
+                if let Ok(data) = bincode::serialize(&welcome_msg) {
+                    println!("📤 Enviando WELCOME a jugador {}", id);
+                    let _ = network_tx.0.send(OutgoingMessage::ToOne {
+                        peer_id,
+                        channel: 0, // Canal reliable
+                        data,
+                    });
+                }
+
+                // Spawn física del jugador (Sphere) - igual estructura que RustBall
+                let spawn_x = ((id % 3) as f32 - 1.0) * 200.0;
+                let spawn_y = ((id / 3) as f32 - 1.0) * 200.0;
+
+                let sphere_entity = commands
+                    .spawn((
+                        Sphere,
+                        TransformBundle::from_transform(Transform::from_xyz(spawn_x, spawn_y, 0.0)),
+                        RigidBody::Dynamic,
+                        Collider::ball(config.sphere_radius),
+                        Velocity::zero(),
+                        // Jugador: colisiona con todo EXCEPTO líneas solo-pelota (GROUP_5)
+                        CollisionGroups::new(Group::GROUP_4, Group::ALL ^ Group::GROUP_5),
+                        SolverGroups::new(Group::GROUP_4, Group::ALL ^ Group::GROUP_5),
+                        Friction {
+                            coefficient: config.sphere_friction,
+                            combine_rule: CoefficientCombineRule::Min,
+                        },
+                        Restitution {
+                            coefficient: config.sphere_restitution,
+                            combine_rule: CoefficientCombineRule::Average,
+                        },
+                        Damping {
+                            linear_damping: config.sphere_linear_damping,
+                            angular_damping: config.sphere_angular_damping,
+                        },
+                        ExternalImpulse::default(),
+                        ExternalForce::default(),
+                    ))
+                    .id();
+
+                // Spawn lógica del jugador (Player) - Usando peer_id ahora
+                commands.spawn(Player {
+                    sphere: sphere_entity,
+                    id,
+                    name: name.clone(),
+                    kick_charge: 0.0,
+                    kick_charging: false,
+                    peer_id, // Guardamos peer_id para enviar mensajes
+                    is_ready: false,
+                    not_interacting: false,
+                    is_sliding: false,
+                    slide_direction: Vec2::ZERO,
+                    slide_timer: 0.0,
+                    ball_target_position: None,
+                    stamin: 1.0,
+                });
+
+                println!("✅ Jugador {} spawneado: {}", id, name);
+            }
+
+            NetworkEvent::PlayerInput { peer_id, input } => {
+                // Buscar el player_id real usando el peer_id
+                for (player, _) in players.iter() {
+                    if player.peer_id == peer_id {
+                        game_input.update_input(player.id, input);
+                        break;
+                    }
+                }
+            }
+
+            NetworkEvent::PlayerDisconnected { peer_id } => {
+                for (player, entity) in players.iter() {
+                    if player.peer_id == peer_id {
+                        // Despawnear tanto Player como Sphere (igual que RustBall)
+                        commands.entity(player.sphere).despawn();
+                        commands.entity(entity).despawn();
+                        println!("❌ Jugador {} removido", player.id);
+                        break;
+                    }
+                }
+            }
+
+            NetworkEvent::PlayerReady { peer_id } => {
+                for (mut player, _) in players.iter_mut() {
+                    if player.peer_id == peer_id {
+                        player.is_ready = true;
+                        println!(
+                            "✅ Jugador {} marcado como READY en el loop de juego",
+                            player.id
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn broadcast_game_state(
+    time: Res<Time>,
+    config: Res<GameConfig>,
+    mut broadcast_timer: ResMut<BroadcastTimer>,
+    mut tick: ResMut<GameTick>,
+    players: Query<&Player>,
+    sphere_query: Query<(&Transform, &Velocity), With<Sphere>>,
+    ball: Query<(&Transform, &Velocity, &Ball), Without<Sphere>>,
+    network_tx: Res<NetworkSender>,
+) {
+    // Actualizar timer
+    broadcast_timer.0.tick(time.delta());
+
+    // Solo enviar cuando el timer se completa (30 veces por segundo)
+    if !broadcast_timer.0.just_finished() {
+        return;
+    }
+
+    tick.0 += 1;
+
+    // Construir estado
+    let player_states: Vec<PlayerState> = players
+        .iter()
+        .filter_map(|player| {
+            if let Ok((transform, velocity)) = sphere_query.get(player.sphere) {
+                // Extraer rotación Z del quaternion
+                let (_, _, rotation_z) = transform.rotation.to_euler(EulerRot::XYZ);
+
+                Some(PlayerState {
+                    id: player.id,
+                    name: player.name.clone(),
+                    position: Vec2::new(transform.translation.x, transform.translation.y),
+                    velocity: (velocity.linvel.x, velocity.linvel.y),
+                    rotation: rotation_z,
+                    kick_charge: player.kick_charge,
+                    kick_charging: player.kick_charging,
+                    is_sliding: player.is_sliding,
+                    not_interacting: player.not_interacting,
+                    ball_target_position: player.ball_target_position,
+                    stamin_charge: player.stamin,
+                })
+            } else {
+                println!(
+                    "⚠️  No se pudo obtener Transform/Velocity para jugador {}",
+                    player.id
+                );
+                None
+            }
+        })
+        .collect();
+
+    // Log cada 60 ticks (2 segundos)
+    if tick.0 % 60 == 0 {
+        println!(
+            "📊 [Tick {}] Jugadores: {}, Ready: {}",
+            tick.0,
+            players.iter().count(),
+            players.iter().filter(|p| p.is_ready).count()
+        );
+    }
+
+    let ball_state = if let Ok((transform, velocity, ball)) = ball.get_single() {
+        BallState {
+            position: (transform.translation.x, transform.translation.y),
+            velocity: (velocity.linvel.x, velocity.linvel.y),
+            angular_velocity: ball.angular_velocity,
+        }
+    } else {
+        BallState {
+            position: (0.0, 0.0),
+            velocity: (0.0, 0.0),
+            angular_velocity: 0.0,
+        }
+    };
+
+    let game_state = ServerMessage::GameState {
+        tick: tick.0,
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64,
+        players: player_states,
+        ball: ball_state,
+    };
+
+    // Extraer datos de game_state (ServerMessage) para GameDataMessage
+    let (tick_num, timestamp_num, players_vec, ball_state_data) = match game_state {
+        ServerMessage::GameState {
+            tick,
+            timestamp,
+            players,
+            ball,
+        } => (tick, timestamp, players, ball),
+        _ => return, // No debería pasar
+    };
+
+    // Crear GameDataMessage para el canal unreliable
+    let game_data_msg = GameDataMessage::GameState {
+        tick: tick_num,
+        timestamp: timestamp_num,
+        players: players_vec,
+        ball: ball_state_data,
+    };
+
+    // Serializar y broadcast a todos los jugadores READY
+    if let Ok(data) = bincode::serialize(&game_data_msg) {
+        // Enviar solo a jugadores que están ready
+        for player in players.iter() {
+            if player.is_ready {
+                let _ = network_tx.0.send(OutgoingMessage::ToOne {
+                    peer_id: player.peer_id,
+                    channel: 1, // Canal unreliable para GameState
+                    data: data.clone(),
+                });
+            }
+        }
+    }
+}

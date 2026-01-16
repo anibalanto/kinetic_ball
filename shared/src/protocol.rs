@@ -139,8 +139,6 @@ pub struct PlayerState {
     pub rotation: f32,
     pub kick_charge: f32,
     pub kick_charging: bool,
-    pub curve_charge: f32,
-    pub curve_charging: bool,
     pub is_sliding: bool,
     pub not_interacting: bool,
     pub ball_target_position: Option<Vec2>,
