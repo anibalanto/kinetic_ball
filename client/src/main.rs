@@ -16,8 +16,12 @@ struct Args {
     #[arg(short, long, default_value = "ws://127.0.0.1:3536")]
     server: String,
 
+    /// Nombre de la sala/room en matchbox
+    #[arg(short, long, default_value = "game_server")]
+    room: String,
+
     /// Nombre del jugador
-    #[arg(short, long, default_value = "Player")]
+    #[arg(long, default_value = "Player")]
     name: String,
 }
 
@@ -29,6 +33,7 @@ fn main() {
     let (input_tx, input_rx) = mpsc::channel();
 
     let server_url = args.server.clone();
+    let room = args.room.clone();
     let player_name = args.name.clone();
 
     // Hilo de red con matchbox WebRTC
@@ -40,7 +45,7 @@ fn main() {
             .expect("Fallo al crear Runtime de Tokio");
 
         rt.block_on(async {
-            start_webrtc_client(server_url, player_name, network_tx, input_rx).await;
+            start_webrtc_client(server_url, room, player_name, network_tx, input_rx).await;
         });
         println!("🌐 [Red] El hilo de red HA TERMINADO");
     });
@@ -176,17 +181,18 @@ struct PlayerSprite {
 
 async fn start_webrtc_client(
     signaling_url: String,
+    room: String,
     player_name: String,
     network_tx: mpsc::Sender<ServerMessage>,
     mut input_rx: mpsc::Receiver<PlayerInput>,
 ) {
     println!(
-        "🔌 [Red] Conectando a matchbox en {}/game_server",
-        signaling_url
+        "🔌 [Red] Conectando a matchbox en {}/{}",
+        signaling_url, room
     );
 
-    // Crear WebRtcSocket y conectar a la room "game_server"
-    let room_url = format!("{}/game_server", signaling_url);
+    // Crear WebRtcSocket y conectar a la room
+    let room_url = format!("{}/{}", signaling_url, room);
     let (mut socket, loop_fut) = WebRtcSocket::builder(room_url)
         .add_channel(matchbox_socket::ChannelConfig::reliable()) // Canal 0: Control
         .add_channel(matchbox_socket::ChannelConfig::unreliable()) // Canal 1: GameData

@@ -33,9 +33,13 @@ struct Cli {
     #[arg(short, long, default_value = "9000")]
     port: u16,
 
-    /// Puerto del servidor de señalización matchbox
-    #[arg(long, default_value = "3536")]
-    signaling_port: u16,
+    /// URL del servidor de señalización matchbox (ej: ws://localhost:3536 o wss://matchbox.ejemplo.com)
+    #[arg(long, default_value = "ws://127.0.0.1:3536")]
+    signaling_url: String,
+
+    /// Nombre de la sala/room en matchbox
+    #[arg(long, default_value = "game_server")]
+    room: String,
 }
 
 fn main() {
@@ -95,16 +99,15 @@ fn main() {
         (GameConfig::default(), None)
     };
 
-    // IMPORTANTE: Se requiere ejecutar matchbox_server en un terminal separado:
+    // IMPORTANTE: Se requiere ejecutar matchbox_server (o tener uno accesible en la URL configurada)
     // cargo install matchbox_server
     // matchbox_server
-    // Por defecto escucha en puerto 3536
 
     println!(
-        "⚠️  Asegúrate de tener matchbox_server corriendo en puerto {}",
-        cli.signaling_port
+        "⚠️  Asegúrate de tener matchbox_server accesible en: {}",
+        cli.signaling_url
     );
-    println!("   Ejecuta: matchbox_server --port {}", cli.signaling_port);
+    println!("   Para local: matchbox_server");
 
     let (network_tx, network_rx) = mpsc::channel();
     let (outgoing_tx, outgoing_rx) = mpsc::channel();
@@ -117,9 +120,10 @@ fn main() {
     }));
 
     // Iniciar servidor WebRTC (se conecta a matchbox como peer)
-    let signaling_url = format!("ws://127.0.0.1:{}", cli.signaling_port);
+    let signaling_url = cli.signaling_url.clone();
+    let room = cli.room.clone();
     std::thread::spawn(move || {
-        start_webrtc_server(network_tx, network_state, signaling_url, outgoing_rx);
+        start_webrtc_server(network_tx, network_state, signaling_url, room, outgoing_rx);
     });
 
     App::new()
@@ -332,6 +336,7 @@ fn start_webrtc_server(
     event_tx: mpsc::Sender<NetworkEvent>,
     state: Arc<Mutex<NetworkState>>,
     signaling_url: String,
+    room: String,
     outgoing_rx: mpsc::Receiver<OutgoingMessage>,
 ) {
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -341,12 +346,12 @@ fn start_webrtc_server(
 
     rt.block_on(async {
         println!(
-            "🌐 Server connecting to matchbox at {}/game_server",
-            signaling_url
+            "🌐 Server connecting to matchbox at {}/{}",
+            signaling_url, room
         );
 
-        // Crear WebRtcSocket y conectar a la room "game_server"
-        let room_url = format!("{}/game_server", signaling_url);
+        // Crear WebRtcSocket y conectar a la room
+        let room_url = format!("{}/{}", signaling_url, room);
         let (mut socket, loop_fut) = WebRtcSocket::builder(room_url)
             .add_channel(matchbox_socket::ChannelConfig::reliable()) // Canal 0: Control (reliable)
             .add_channel(matchbox_socket::ChannelConfig::unreliable()) // Canal 1: GameData (unreliable)
