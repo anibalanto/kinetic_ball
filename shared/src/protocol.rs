@@ -25,6 +25,10 @@ pub enum ControlMessage {
     PlayerDisconnected {
         player_id: u32,
     },
+    ChangeTeamColor {
+        team_index: u8,
+        color: (f32, f32, f32),
+    },
     Error {
         message: String,
     },
@@ -124,6 +128,11 @@ pub enum ServerMessage {
         player_id: u32,
     },
 
+    ChangeTeamColor {
+        team_index: u8,
+        color: (f32, f32, f32),
+    },
+
     Error {
         message: String,
     },
@@ -143,6 +152,12 @@ pub struct PlayerState {
     pub not_interacting: bool,
     pub ball_target_position: Option<Vec2>,
     pub stamin_charge: f32,
+    // Slide cube state
+    pub slide_cube_active: bool,
+    pub slide_cube_offset: Vec2,  // Posición relativa al jugador
+    pub slide_cube_scale: f32,    // 1.0 normal, 3.0 cuando slide activo
+    // Team
+    pub team_index: u8,
 }
 
 /// Estado de la pelota
@@ -157,6 +172,9 @@ pub struct BallState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "bevy", derive(bevy::prelude::Resource))]
 pub struct GameConfig {
+    // Colores de equipo (RGB)
+    pub team_colors: Vec<(f32, f32, f32)>,
+
     // Velocidades básicas
     pub player_speed: f32,
     pub walk_coeficient: f32,
@@ -215,6 +233,12 @@ fn default_true() -> bool {
 impl Default for GameConfig {
     fn default() -> Self {
         Self {
+            // Colores de equipo por defecto
+            team_colors: vec![
+                (0.9, 0.2, 0.2), // Equipo 0: Rojo
+                (0.2, 0.4, 0.9), // Equipo 1: Azul
+            ],
+
             // Velocidades básicas
             player_speed: 375.0,
             walk_coeficient: 0.70,
@@ -248,8 +272,8 @@ impl Default for GameConfig {
             attract_max_distance: 100.0,
 
             // Arena
-            arena_width: 2000.0,
-            arena_height: 1500.0,
+            arena_width: 8000.0,
+            arena_height: 4500.0,
             wall_restitution: 0.8,
 
             //Dash time

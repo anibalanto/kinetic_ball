@@ -164,11 +164,11 @@ fn main() {
             (
                 update_input_manager,
                 process_network_messages,
+                look_at_ball,
                 detect_slide,
                 execute_slide,
                 move_players,
                 handle_collision_player,
-                look_at_ball,
                 charge_kick,
                 kick_ball,
                 apply_magnus_effect,
@@ -262,8 +262,9 @@ impl Default for GameInputManager {
 // Estructura igual a RustBall - Player referencia a Sphere
 #[derive(Component)]
 pub struct Player {
-    pub sphere: Entity, // Referencia a la entidad física (igual que RustBall)
-    pub id: u32,        // Reemplaza input_type de RustBall
+    pub sphere: Entity,     // Referencia a la entidad física (igual que RustBall)
+    pub slide_cube: Entity, // Referencia al cubo de dirección/slide
+    pub id: u32,
     pub name: String,
     pub kick_charge: f32,
     pub kick_charging: bool,
@@ -278,11 +279,25 @@ pub struct Player {
 
     pub ball_target_position: Option<Vec2>,
     pub stamin: f32,
+
+    // Slide cube state
+    pub slide_cube_active: bool,
+    pub slide_cube_offset: Vec2,
+    pub slide_cube_scale: f32,
+
+    // Team
+    pub team_index: u8,
 }
 
 // Marker component para la entidad física del jugador (igual que RustBall)
 #[derive(Component)]
 pub struct Sphere;
+
+// Marker component para el cubo de dirección/slide
+#[derive(Component)]
+pub struct SlideCube {
+    pub owner_id: u32,
+}
 
 #[derive(Component)]
 pub struct Ball {

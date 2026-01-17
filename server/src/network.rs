@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::{
     Ball, BroadcastTimer, GameInputManager, GameTick, LoadedMap, NetworkEvent, NetworkReceiver,
-    NetworkSender, NetworkState, OutgoingMessage, Player, Sphere,
+    NetworkSender, NetworkState, OutgoingMessage, Player, SlideCube, Sphere,
 };
 
 // ============================================================================
@@ -235,14 +235,37 @@ pub fn process_network_messages(
                     ))
                     .id();
 
+                // Spawn del cubo de dirección/slide (inicialmente sin física)
+                let cube_size = config.sphere_radius / 3.0;
+                let cube_offset = Vec2::new(config.sphere_radius * 0.7, 0.0);
+
+                let slide_cube_entity = commands
+                    .spawn((
+                        SlideCube { owner_id: id },
+                        TransformBundle::from_transform(
+                            Transform::from_xyz(
+                                spawn_x + cube_offset.x,
+                                spawn_y + cube_offset.y,
+                                0.0,
+                            )
+                            .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4))
+                            .with_scale(Vec3::splat(1.0)),
+                        ),
+                    ))
+                    .id();
+
+                // Asignar equipo basado en ID (par = 0, impar = 1)
+                let team_index = (id % 2) as u8;
+
                 // Spawn lógica del jugador (Player) - Usando peer_id ahora
                 commands.spawn(Player {
                     sphere: sphere_entity,
+                    slide_cube: slide_cube_entity,
                     id,
                     name: name.clone(),
                     kick_charge: 0.0,
                     kick_charging: false,
-                    peer_id, // Guardamos peer_id para enviar mensajes
+                    peer_id,
                     is_ready: false,
                     not_interacting: false,
                     is_sliding: false,
@@ -250,6 +273,10 @@ pub fn process_network_messages(
                     slide_timer: 0.0,
                     ball_target_position: None,
                     stamin: 1.0,
+                    slide_cube_active: false,
+                    slide_cube_offset: cube_offset,
+                    slide_cube_scale: 1.0,
+                    team_index,
                 });
 
                 println!("✅ Jugador {} spawneado: {}", id, name);
@@ -333,6 +360,10 @@ pub fn broadcast_game_state(
                     not_interacting: player.not_interacting,
                     ball_target_position: player.ball_target_position,
                     stamin_charge: player.stamin,
+                    slide_cube_active: player.slide_cube_active,
+                    slide_cube_offset: player.slide_cube_offset,
+                    slide_cube_scale: player.slide_cube_scale,
+                    team_index: player.team_index,
                 })
             } else {
                 println!(

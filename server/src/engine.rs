@@ -7,7 +7,7 @@ use bevy_rapier2d::prelude::*;
 use shared::GameConfig;
 
 use crate::input::GameAction;
-use crate::{Ball, GameInputManager, Player, Sphere};
+use crate::{Ball, GameInputManager, Player, SlideCube, Sphere};
 
 pub fn move_players(
     game_input: Res<GameInputManager>,
@@ -361,32 +361,23 @@ pub fn attract_ball(
 pub fn detect_slide(
     game_input: Res<GameInputManager>,
     config: Res<GameConfig>,
-    time: Res<Time>,
     mut player_query: Query<&mut Player>,
     sphere_query: Query<(&Velocity, &Transform), With<Sphere>>,
 ) {
     for mut player in player_query.iter_mut() {
-        let player_id = player.id;
-
-        // Leer comando de slide desde el cliente
-        if game_input.just_pressed(player_id, GameAction::Slide) {
+        if game_input.just_pressed(player.id, GameAction::Slide) {
             if config.slide_stamin_cost <= player.stamin && !player.is_sliding {
-                // Obtener dirección actual del movimiento
                 if let Ok((velocity, transform)) = sphere_query.get(player.sphere) {
-                    let current_vel = velocity.linvel;
-
-                    // Solo permitir slide si se está moviendo
-                    if current_vel.length() > 50.0 {
+                    if velocity.linvel.length() > 50.0 {
                         player.is_sliding = true;
-                        player.slide_timer = 0.3; // Duración de la barrida
+                        player.slide_timer = 0.3; // Duración total
+
+                        // DIRECCIÓN: Usamos la rotación actual (que mira a la pelota gracias a look_at_ball)
                         let (_, _, angle) = transform.rotation.to_euler(EulerRot::XYZ);
                         player.slide_direction = Vec2::new(angle.cos(), angle.sin());
-                        player.stamin -= config.slide_stamin_cost; // 1.5 segundos de cooldown
 
-                        println!(
-                            "🏃 Jugador {} inicia barrida hacia {:?}",
-                            player_id, player.slide_direction
-                        );
+                        player.stamin -= config.slide_stamin_cost;
+                        player.slide_cube_active = true;
                     }
                 }
             }
@@ -394,44 +385,67 @@ pub fn detect_slide(
     }
 }
 
-// Sistema de ejecución de barrida: aplica velocidad y cambia forma
 pub fn execute_slide(
+    mut commands: Commands,
     config: Res<GameConfig>,
     time: Res<Time>,
     mut player_query: Query<&mut Player>,
-    mut sphere_query: Query<(&mut Velocity, &mut Collider, &mut Transform), With<Sphere>>,
+    sphere_query: Query<&Transform, (With<Sphere>, Without<SlideCube>)>,
+    mut cube_query: Query<
+        (Entity, &mut Transform, Option<&Collider>),
+        (With<SlideCube>, Without<Sphere>),
+    >,
 ) {
     for mut player in player_query.iter_mut() {
-        if player.is_sliding {
-            if let Ok((mut velocity, mut collider, mut transform)) =
-                sphere_query.get_mut(player.sphere)
+        if !player.is_sliding {
+            continue;
+        }
+
+        if let Ok(sphere_transform) = sphere_query.get(player.sphere) {
+            let total_time = 0.3;
+            let elapsed = total_time - player.slide_timer;
+            let progress = (elapsed / total_time).clamp(0.0, 1.0);
+
+            // FASES: 1. Avanza (0-0.4), 2. Mantiene (0.4-0.7), 3. Retrocede (0.7-1.0)
+            let (scale_factor, dist_factor) = if progress < 0.4 {
+                let p = progress / 0.4;
+                (p * 3.0, p)
+            } else if progress < 0.7 {
+                (3.0, 1.0)
+            } else {
+                let p = (progress - 0.7) / 0.3;
+                (3.0 * (1.0 - p), 1.0 - p) // Vuelve hacia el jugador
+            };
+
+            player.slide_cube_scale = scale_factor.max(0.1);
+            let max_dist = config.sphere_radius * 1.8; // Un poco más lejos para llegar bien
+            player.slide_cube_offset = player.slide_direction * (max_dist * dist_factor);
+
+            if let Ok((cube_entity, mut cube_transform, maybe_collider)) =
+                cube_query.get_mut(player.slide_cube)
             {
-                // Aplicar velocidad fija en dirección del slide (doble de velocidad normal)
-                let slide_speed = config.player_speed * 1.5;
-                velocity.linvel = player.slide_direction * slide_speed;
+                // POSICIÓN MUNDIAL: Posición jugador + Offset
+                let player_pos = sphere_transform.translation.truncate();
+                cube_transform.translation = (player_pos + player.slide_cube_offset).extend(2.0);
+                cube_transform.scale = Vec3::splat(player.slide_cube_scale);
 
-                // Cambiar forma a cápsula orientada en dirección del movimiento
-                // Calcular ángulo de la dirección (en radianes)
-                let angle = player.slide_direction.y.atan2(player.slide_direction.x)
-                    - std::f32::consts::FRAC_PI_2;
+                if maybe_collider.is_none() && progress > 0.1 {
+                    let size = (config.sphere_radius / 1.5) * player.slide_cube_scale;
+                    commands.entity(cube_entity).insert((
+                        Collider::cuboid(size / 2.0, size / 2.0),
+                        CollisionGroups::new(Group::GROUP_4, Group::GROUP_3),
+                    ));
+                }
+            }
 
-                // Rotar el Transform para que la cápsula vertical apunte en la dirección correcta
-                transform.rotation = Quat::from_rotation_z(angle);
+            player.slide_timer -= time.delta_seconds();
 
-                // Cápsula vertical (en espacio local) de 45 (radio) + 15 de extensión
-                let capsule_half_height = 15.0;
-                *collider = Collider::capsule_y(capsule_half_height, config.sphere_radius);
-
-                // Reducir timer
-                player.slide_timer -= time.delta_seconds();
-
-                // Si terminó la barrida
-                if player.slide_timer <= 0.0 {
-                    player.is_sliding = false;
-                    // Restaurar forma original (esfera) y rotación
-                    *collider = Collider::ball(config.sphere_radius);
-                    transform.rotation = Quat::IDENTITY;
-                    println!("🏁 Jugador {} termina barrida", player.id);
+            if player.slide_timer <= 0.0 {
+                player.is_sliding = false;
+                player.slide_cube_active = false;
+                player.slide_cube_offset = Vec2::ZERO; // Reset final
+                if let Ok((cube_entity, _, _)) = cube_query.get_mut(player.slide_cube) {
+                    commands.entity(cube_entity).remove::<Collider>();
                 }
             }
         }

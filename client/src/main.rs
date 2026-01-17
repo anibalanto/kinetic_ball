@@ -60,6 +60,77 @@ impl ConnectionConfig {
     }
 }
 
+// ============================================================================
+// FUNCIONES HELPER DE COLORES
+// ============================================================================
+
+/// Convierte RGB a HSV
+fn rgb_to_hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    let v = max;
+    let s = if max == 0.0 { 0.0 } else { delta / max };
+
+    let h = if delta == 0.0 {
+        0.0
+    } else if max == r {
+        ((g - b) / delta).rem_euclid(6.0) / 6.0
+    } else if max == g {
+        ((b - r) / delta + 2.0) / 6.0
+    } else {
+        ((r - g) / delta + 4.0) / 6.0
+    };
+
+    (h, s, v)
+}
+
+/// Convierte HSV a RGB
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
+    if s == 0.0 {
+        return (v, v, v);
+    }
+
+    let h = h * 6.0;
+    let i = h.floor() as i32;
+    let f = h - i as f32;
+    let p = v * (1.0 - s);
+    let q = v * (1.0 - s * f);
+    let t = v * (1.0 - s * (1.0 - f));
+
+    match i % 6 {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    }
+}
+
+/// Calcula el color complementario rotando el Hue 180 grados en HSV
+fn complementary_color(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let (h, s, v) = rgb_to_hsv(r, g, b);
+    let h_opposite = (h + 0.5).rem_euclid(1.0);
+    hsv_to_rgb(h_opposite, s, v)
+}
+
+/// Calcula el color del jugador y su color opuesto para barras/texto
+/// basándose en el índice de equipo y los colores definidos en la configuración
+fn get_team_colors(team_index: u8, team_colors: &[(f32, f32, f32)]) -> (Color, Color) {
+    let team_color = team_colors
+        .get(team_index as usize)
+        .copied()
+        .unwrap_or((0.5, 0.5, 0.5));
+
+    let player_color = Color::srgb(team_color.0, team_color.1, team_color.2);
+    let (r, g, b) = complementary_color(team_color.0, team_color.1, team_color.2);
+    let opposite_color = Color::srgb(r, g, b);
+
+    (player_color, opposite_color)
+}
+
 fn main() {
     let args = Args::parse();
     println!("🎮 Haxball Client - Iniciando...");
@@ -120,6 +191,7 @@ fn main() {
                 camera_zoom_control,
                 update_charge_bar,
                 update_player_sprite,
+                update_slide_cube,
                 update_target_ball_position,
                 update_dash_cooldown,
             )
@@ -167,12 +239,17 @@ struct MenuCamera;
 #[derive(Component)]
 struct RemotePlayer {
     id: u32,
+    team_index: u8,
     kick_charge: f32,
     is_sliding: bool,
     not_interacting: bool,
     base_color: Color,
     ball_target_position: Option<Vec2>,
     stamin_charge: f32,
+    // Slide cube state
+    slide_cube_active: bool,
+    slide_cube_offset: Vec2,
+    slide_cube_scale: f32,
 }
 
 #[derive(Component)]
@@ -211,6 +288,11 @@ struct PlayerSprite {
 
 #[derive(Component)]
 struct PlayerOutline;
+
+#[derive(Component)]
+struct SlideCubeVisual {
+    parent_id: u32,
+}
 
 // ============================================================================
 // SISTEMAS DE MENÚ
@@ -633,7 +715,7 @@ fn handle_input(
 fn process_network_messages(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    config: Res<GameConfig>,
+    mut config: ResMut<GameConfig>,
     channels: Res<NetworkChannels>,
     mut my_id: ResMut<MyPlayerId>,
     mut loaded_map: ResMut<LoadedMap>,
@@ -646,9 +728,15 @@ fn process_network_messages(
             &mut Transform,
             &mut RemotePlayer,
             &mut Collider,
+            &Children,
         ),
         (Without<RemoteBall>, Without<MainCamera>),
     >,
+    // Queries para actualizar colores de equipo
+    mut bar_sprites: Query<&mut Sprite, Or<(With<KickChargeBarCurveLeft>, With<KickChargeBarCurveRight>)>>,
+    player_materials: Query<(&PlayerSprite, &Handle<ColorMaterial>)>,
+    children_query: Query<&Children>,
+    mut text_query: Query<&mut Text>,
 ) {
     let Some(ref receiver) = channels.receiver else {
         return;
@@ -712,6 +800,53 @@ fn process_network_messages(
                 }
                 last_game_state = Some((players, ball));
             }
+            ServerMessage::ChangeTeamColor { team_index, color } => {
+                println!(
+                    "🎨 Cambio de color equipo {}: ({:.2}, {:.2}, {:.2})",
+                    team_index, color.0, color.1, color.2
+                );
+
+                // 1. Actualizar config
+                while config.team_colors.len() <= team_index as usize {
+                    config.team_colors.push((0.5, 0.5, 0.5));
+                }
+                config.team_colors[team_index as usize] = color;
+
+                // 2. Calcular nuevos colores
+                let (player_color, opposite_color) = get_team_colors(team_index, &config.team_colors);
+
+                // 3. Actualizar jugadores de ese equipo
+                for (_, _, player, _, children) in players_q.iter() {
+                    if player.team_index != team_index {
+                        continue;
+                    }
+
+                    for &child in children.iter() {
+                        // Actualizar sprite del jugador
+                        if let Ok((_, mat_handle)) = player_materials.get(child) {
+                            if let Some(mat) = materials.get_mut(mat_handle) {
+                                mat.color = player_color;
+                            }
+                        }
+
+                        // Actualizar barras de carga
+                        if let Ok(mut sprite) = bar_sprites.get_mut(child) {
+                            sprite.color = opposite_color;
+
+                            // Actualizar texto hijo de la barra
+                            if let Ok(bar_children) = children_query.get(child) {
+                                for &text_entity in bar_children.iter() {
+                                    if let Ok(mut text) = text_query.get_mut(text_entity) {
+                                        for section in text.sections.iter_mut() {
+                                            section.style.color = opposite_color;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -761,7 +896,7 @@ fn process_network_messages(
         // Actualizar Jugadores
         for ps in players {
             let mut found = false;
-            for (mut interp, mut transform, mut rp, mut collider) in players_q.iter_mut() {
+            for (mut interp, mut transform, mut rp, mut collider, _children) in players_q.iter_mut() {
                 if rp.id == ps.id {
                     interp.target_position = ps.position;
                     interp.target_velocity = Vec2::new(ps.velocity.0, ps.velocity.1);
@@ -772,16 +907,11 @@ fn process_network_messages(
                     rp.is_sliding = ps.is_sliding;
                     rp.ball_target_position = ps.ball_target_position;
                     rp.stamin_charge = ps.stamin_charge;
+                    rp.slide_cube_active = ps.slide_cube_active;
+                    rp.slide_cube_offset = ps.slide_cube_offset;
+                    rp.slide_cube_scale = ps.slide_cube_scale;
 
-                    // Actualizar collider según estado de slide
-                    if ps.is_sliding {
-                        // Cápsula para slide (igual que servidor)
-                        *collider = Collider::capsule_y(15.0, config.sphere_radius);
-                        transform.rotation = Quat::from_rotation_z(ps.rotation);
-                    } else {
-                        // Esfera normal
-                        *collider = Collider::ball(config.sphere_radius);
-                    }
+                    // El jugador mantiene su forma circular, el cubo se maneja aparte
 
                     found = true;
                     break;
@@ -794,12 +924,8 @@ fn process_network_messages(
                     ps.name, ps.id
                 );
 
-                // Color de equipo basado en ID (par = rojo, impar = azul)
-                let player_color = if ps.id % 2 == 0 {
-                    Color::srgb(0.9, 0.2, 0.2) // Equipo Rojo
-                } else {
-                    Color::srgb(0.2, 0.4, 0.9) // Equipo Azul
-                };
+                // Colores de equipo desde la configuración
+                let (player_color, opposite_color) = get_team_colors(ps.team_index, &config.team_colors);
 
                 // Igual que RustBall: usar textura con children
                 commands
@@ -810,12 +936,16 @@ fn process_network_messages(
                         },
                         RemotePlayer {
                             id: ps.id,
+                            team_index: ps.team_index,
                             kick_charge: ps.kick_charge,
                             is_sliding: ps.is_sliding,
                             not_interacting: ps.not_interacting,
                             base_color: player_color,
                             ball_target_position: ps.ball_target_position,
                             stamin_charge: ps.stamin_charge,
+                            slide_cube_active: ps.slide_cube_active,
+                            slide_cube_offset: ps.slide_cube_offset,
+                            slide_cube_scale: ps.slide_cube_scale,
                         },
                         Collider::ball(config.sphere_radius), // Para debug rendering
                         Interpolated {
@@ -853,12 +983,12 @@ fn process_network_messages(
                             PlayerSprite { parent_id: ps.id },
                         ));
 
-                        // Indicador de dirección (cuadrado hacia adelante)
+                        // Indicador de dirección / Slide cube
                         let indicator_size = radius / 3.0;
-                        let indicator_distance = radius * 0.7;
-                        // 0 grados = eje X positivo (hacia la derecha/adelante)
-                        let indicator_x = indicator_distance;
-                        let indicator_y = 0.0;
+                        // Usar offset del servidor o valor por defecto
+                        let indicator_x = ps.slide_cube_offset.x;
+                        let indicator_y = ps.slide_cube_offset.y;
+                        let cube_scale = ps.slide_cube_scale;
 
                         // Mesh personalizado: cuadrado con 4 vértices (LineStrip)
                         let half = indicator_size / 2.0;
@@ -869,21 +999,27 @@ fn process_network_messages(
                         square_mesh.insert_attribute(
                             Mesh::ATTRIBUTE_POSITION,
                             vec![
-                                [-half, -half, 0.0], // esquina inferior izquierda
-                                [half, -half, 0.0],  // esquina inferior derecha
-                                [half, half, 0.0],   // esquina superior derecha
-                                [-half, half, 0.0],  // esquina superior izquierda
-                                [-half, -half, 0.0], // cerrar el cuadrado
+                                [-half, -half, 0.0],
+                                [half, -half, 0.0],
+                                [half, half, 0.0],
+                                [-half, half, 0.0],
+                                [-half, -half, 0.0],
                             ],
                         );
 
-                        parent.spawn(MaterialMesh2dBundle {
-                            mesh: Mesh2dHandle(meshes.add(square_mesh)),
-                            material: materials.add(Color::WHITE),
-                            transform: Transform::from_xyz(indicator_x, indicator_y, 1.5)
-                                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4)),
-                            ..default()
-                        });
+                        parent.spawn((
+                            MaterialMesh2dBundle {
+                                mesh: Mesh2dHandle(meshes.add(square_mesh)),
+                                material: materials.add(Color::WHITE),
+                                transform: Transform::from_xyz(indicator_x, indicator_y, 1.5)
+                                    .with_rotation(Quat::from_rotation_z(
+                                        std::f32::consts::FRAC_PI_4,
+                                    ))
+                                    .with_scale(Vec3::splat(cube_scale)),
+                                ..default()
+                            },
+                            SlideCubeVisual { parent_id: ps.id },
+                        ));
 
                         // Barra de carga de patada
                         parent.spawn((
@@ -896,7 +1032,7 @@ fn process_network_messages(
                                     ..default()
                                 },
                                 //transform: Transform::from_xyz(-25.0, 60.0, 30.0),
-                                transform: Transform::from_xyz(-5.0, 0.0, 30.0),
+                                transform: Transform::from_xyz(0.0, 0.0, 30.0),
                                 ..default()
                             },
                         ));
@@ -904,44 +1040,82 @@ fn process_network_messages(
                         let angle = 25.0f32.to_radians();
 
                         // Barra de carga de patada a la izquierda
-                        parent.spawn((
-                            KickChargeBarCurveLeft,
-                            SpriteBundle {
-                                sprite: Sprite {
-                                    color: Color::srgb(1.0, 0.0, 0.0),
-                                    custom_size: Some(Vec2::new(0.0, 5.0)),
-                                    anchor: bevy::sprite::Anchor::CenterLeft,
+                        parent
+                            .spawn((
+                                KickChargeBarCurveLeft,
+                                SpriteBundle {
+                                    sprite: Sprite {
+                                        color: opposite_color,
+                                        custom_size: Some(Vec2::new(5.0, 5.0)),
+                                        anchor: bevy::sprite::Anchor::CenterLeft,
+                                        ..default()
+                                    },
+                                    transform: Transform {
+                                        translation: Vec3::new(0.0, -10.0, 30.0),
+                                        // Rotación hacia la izquierda (positiva en el eje Z)
+                                        rotation: Quat::from_rotation_z(-angle),
+                                        ..default()
+                                    },
                                     ..default()
                                 },
-                                transform: Transform {
-                                    translation: Vec3::new(0.0, -10.0, 30.0),
-                                    // Rotación hacia la izquierda (positiva en el eje Z)
-                                    rotation: Quat::from_rotation_z(-angle),
+                            ))
+                            .with_children(|bar| {
+                                bar.spawn(Text2dBundle {
+                                    text: Text::from_section(
+                                        "D",
+                                        TextStyle {
+                                            font_size: 20.0,
+                                            color: opposite_color,
+                                            ..default()
+                                        },
+                                    ),
+                                    transform: Transform::from_xyz(
+                                        config.ball_radius * 2.0,
+                                        -15.0,
+                                        10.0,
+                                    ),
                                     ..default()
-                                },
-                                ..default()
-                            },
-                        ));
+                                });
+                            });
 
                         // Barra de carga de patada a la derecha
-                        parent.spawn((
-                            KickChargeBarCurveRight,
-                            SpriteBundle {
-                                sprite: Sprite {
-                                    color: Color::srgb(1.0, 0.0, 0.0),
-                                    custom_size: Some(Vec2::new(0.0, 5.0)),
-                                    anchor: bevy::sprite::Anchor::CenterLeft,
+                        parent
+                            .spawn((
+                                KickChargeBarCurveRight,
+                                SpriteBundle {
+                                    sprite: Sprite {
+                                        color: opposite_color,
+                                        custom_size: Some(Vec2::new(5.0, 5.0)),
+                                        anchor: bevy::sprite::Anchor::CenterLeft,
+                                        ..default()
+                                    },
+                                    transform: Transform {
+                                        translation: Vec3::new(0.0, 10.0, 30.0),
+                                        // Rotación hacia la derecha (negativa en el eje Z)
+                                        rotation: Quat::from_rotation_z(angle),
+                                        ..default()
+                                    },
                                     ..default()
                                 },
-                                transform: Transform {
-                                    translation: Vec3::new(0.0, 10.0, 30.0),
-                                    // Rotación hacia la derecha (negativa en el eje Z)
-                                    rotation: Quat::from_rotation_z(angle),
+                            ))
+                            .with_children(|bar| {
+                                bar.spawn(Text2dBundle {
+                                    text: Text::from_section(
+                                        "A",
+                                        TextStyle {
+                                            font_size: 20.0,
+                                            color: opposite_color,
+                                            ..default()
+                                        },
+                                    ),
+                                    transform: Transform::from_xyz(
+                                        config.ball_radius * 2.0,
+                                        15.0,
+                                        10.0,
+                                    ),
                                     ..default()
-                                },
-                                ..default()
-                            },
-                        ));
+                                });
+                            });
 
                         let angle2 = 90.0f32.to_radians();
 
@@ -972,7 +1146,7 @@ fn process_network_messages(
                                 text: Text::from_section(
                                     ps.name.clone(),
                                     TextStyle {
-                                        font_size: 16.0,
+                                        font_size: 20.0,
                                         color: Color::WHITE,
                                         ..default()
                                     },
@@ -1098,7 +1272,7 @@ fn update_charge_bar(
     bar_left_q: Query<Entity, With<KickChargeBarCurveLeft>>,
     bar_right_q: Query<Entity, With<KickChargeBarCurveRight>>,
 ) {
-    let max_width = 50.0;
+    let max_width = 45.0;
 
     for (player, children) in player_query.iter() {
         for &child in children.iter() {
@@ -1106,7 +1280,7 @@ fn update_charge_bar(
             if let Ok(mut sprite) = sprite_query.get_mut(child) {
                 // 1. Caso: Barra Principal
                 if bar_main_q.contains(child) {
-                    sprite.custom_size = Some(Vec2::new(max_width * player.kick_charge, 5.0));
+                    sprite.custom_size = Some(Vec2::new(max_width * player.kick_charge + 5.0, 5.0));
                     sprite.color = Color::srgb(1.0, 1.0 - player.kick_charge, 0.0);
                 }
                 // 2. Caso: Curva Izquierda
@@ -1116,9 +1290,10 @@ fn update_charge_bar(
                     } else {
                         0.0
                     };
-                    sprite.custom_size =
-                        Some(Vec2::new(max_width * player.kick_charge * coeficient, 5.0));
-                    sprite.color = Color::srgb(0.0, 1.0, 1.0); // Color distinto para debug si quieres
+                    sprite.custom_size = Some(Vec2::new(
+                        max_width * player.kick_charge * coeficient + 5.0,
+                        5.0,
+                    ));
                 }
                 // 3. Caso: Curva Derecha
                 else if bar_right_q.contains(child) {
@@ -1127,9 +1302,10 @@ fn update_charge_bar(
                     } else {
                         0.0
                     };
-                    sprite.custom_size =
-                        Some(Vec2::new(max_width * player.kick_charge * coeficient, 5.0));
-                    sprite.color = Color::srgb(0.0, 1.0, 1.0);
+                    sprite.custom_size = Some(Vec2::new(
+                        max_width * player.kick_charge * coeficient + 5.0,
+                        5.0,
+                    ));
                 }
             }
         }
@@ -1177,6 +1353,40 @@ fn update_player_sprite(
 
             if let Some(material) = materials.get_mut(material_handle) {
                 material.color = player.base_color.with_alpha(alpha);
+            }
+        }
+    }
+}
+
+// Sistema para actualizar el slide cube según el estado del servidor
+fn update_slide_cube(
+    player_query: Query<(&RemotePlayer, &Transform)>,
+    mut cube_query: Query<(&SlideCubeVisual, &mut Transform), Without<RemotePlayer>>,
+) {
+    for (cube_visual, mut cube_transform) in cube_query.iter_mut() {
+        // Buscamos al jugador dueño de este cubo
+        if let Some((player, player_transform)) = player_query
+            .iter()
+            .find(|(p, _)| p.id == cube_visual.parent_id)
+        {
+            // Si el cubo NO es hijo jerárquico en Bevy, debemos sumar la posición del jugador:
+            let player_pos = player_transform.translation.truncate();
+
+            // Actualizamos la posición absoluta basándonos en el offset que viene del servidor
+            cube_transform.translation.x = player_pos.x + player.slide_cube_offset.x;
+            cube_transform.translation.y = player_pos.y + player.slide_cube_offset.y;
+            cube_transform.translation.z = 2.0;
+
+            cube_transform.scale = Vec3::splat(player.slide_cube_scale);
+
+            // Rotación alineada con el offset (hacia donde fue la barrida)
+            if player.slide_cube_active {
+                let angle = player.slide_cube_offset.y.atan2(player.slide_cube_offset.x);
+                cube_transform.rotation =
+                    Quat::from_rotation_z(angle + std::f32::consts::FRAC_PI_4);
+            } else {
+                // Invisible o en posición de reposo
+                cube_transform.scale = Vec3::ZERO;
             }
         }
     }
