@@ -29,6 +29,11 @@ pub enum ControlMessage {
         team_index: u8,
         color: (f32, f32, f32),
     },
+    /// Dispara un movimiento predefinido en un jugador
+    TriggerMovement {
+        player_id: u32,
+        movement_id: u8,
+    },
     Error {
         message: String,
     },
@@ -133,9 +138,23 @@ pub enum ServerMessage {
         color: (f32, f32, f32),
     },
 
+    /// Dispara un movimiento predefinido en un jugador
+    TriggerMovement {
+        player_id: u32,
+        movement_id: u8,
+    },
+
     Error {
         message: String,
     },
+}
+
+/// Movimiento activo de un jugador
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PlayerMovement {
+    pub movement_id: u8,
+    pub start_tick: u32,
+    pub end_tick: u32,
 }
 
 /// Estado completo de un jugador
@@ -152,10 +171,8 @@ pub struct PlayerState {
     pub not_interacting: bool,
     pub ball_target_position: Option<Vec2>,
     pub stamin_charge: f32,
-    // Slide cube state
-    pub slide_cube_active: bool,
-    pub slide_cube_offset: Vec2,  // Posición relativa al jugador
-    pub slide_cube_scale: f32,    // 1.0 normal, 3.0 cuando slide activo
+    // Movimiento visual activo
+    pub active_movement: Option<PlayerMovement>,
     // Team
     pub team_index: u8,
 }

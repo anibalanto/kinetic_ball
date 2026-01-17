@@ -280,10 +280,13 @@ pub struct Player {
     pub ball_target_position: Option<Vec2>,
     pub stamin: f32,
 
-    // Slide cube state
+    // Slide cube state (para física del servidor)
     pub slide_cube_active: bool,
     pub slide_cube_offset: Vec2,
     pub slide_cube_scale: f32,
+
+    // Movimiento visual activo
+    pub active_movement: Option<shared::protocol::PlayerMovement>,
 
     // Team
     pub team_index: u8,

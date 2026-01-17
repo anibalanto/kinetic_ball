@@ -4,10 +4,95 @@
 
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
-use shared::GameConfig;
+use matchbox_socket::PeerId;
+use shared::movements::{get_movement, movement_ids};
+use shared::protocol::PlayerMovement;
+use shared::{GameConfig, TICK_RATE};
 
 use crate::input::GameAction;
-use crate::{Ball, GameInputManager, Player, SlideCube, Sphere};
+use crate::{Ball, GameInputManager, GameTick, Player, SlideCube, Sphere};
+
+pub fn spawn_physics(
+    commands: &mut Commands,
+    id: u32,
+    name: String,
+    peer_id: PeerId,
+    config: &Res<GameConfig>,
+) {
+    // Spawn física del jugador (Sphere) - igual estructura que RustBall
+    let spawn_x = ((id % 3) as f32 - 1.0) * 200.0;
+    let spawn_y = ((id / 3) as f32 - 1.0) * 200.0;
+
+    let sphere_entity = commands
+        .spawn((
+            Sphere,
+            TransformBundle::from_transform(Transform::from_xyz(spawn_x, spawn_y, 0.0)),
+            RigidBody::Dynamic,
+            Collider::ball(config.sphere_radius),
+            Velocity::zero(),
+            // Jugador: colisiona con todo EXCEPTO líneas solo-pelota (GROUP_5)
+            CollisionGroups::new(Group::GROUP_4, Group::ALL ^ Group::GROUP_5),
+            SolverGroups::new(Group::GROUP_4, Group::ALL ^ Group::GROUP_5),
+            Friction {
+                coefficient: config.sphere_friction,
+                combine_rule: CoefficientCombineRule::Min,
+            },
+            Restitution {
+                coefficient: config.sphere_restitution,
+                combine_rule: CoefficientCombineRule::Average,
+            },
+            Damping {
+                linear_damping: config.sphere_linear_damping,
+                angular_damping: config.sphere_angular_damping,
+            },
+            ExternalImpulse::default(),
+            ExternalForce::default(),
+        ))
+        .id();
+
+    // Spawn del cubo de dirección/slide (inicialmente sin física)
+    let cube_size = config.sphere_radius / 3.0;
+    let cube_offset = Vec2::new(config.sphere_radius * 0.7, 0.0);
+
+    let slide_cube_entity = commands
+        .spawn((
+            SlideCube { owner_id: id },
+            TransformBundle::from_transform(
+                Transform::from_xyz(spawn_x + cube_offset.x, spawn_y + cube_offset.y, 0.0)
+                    .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4))
+                    .with_scale(Vec3::splat(1.0)),
+            ),
+        ))
+        .id();
+
+    // Asignar equipo basado en ID (par = 0, impar = 1)
+    let team_index = (id % 2) as u8;
+
+    // Spawn lógica del jugador (Player) - Usando peer_id ahora
+    commands.spawn(Player {
+        sphere: sphere_entity,
+        slide_cube: slide_cube_entity,
+        id,
+        name: name.clone(),
+        kick_charge: 0.0,
+        kick_charging: false,
+        peer_id,
+        is_ready: false,
+        not_interacting: false,
+        is_sliding: false,
+        slide_direction: Vec2::ZERO,
+        slide_timer: 0.0,
+        ball_target_position: None,
+        stamin: 1.0,
+        slide_cube_active: false,
+        slide_cube_offset: cube_offset,
+        slide_cube_scale: 1.0,
+        active_movement: None,
+        team_index,
+    });
+
+    println!("✅ Jugador {} spawneado: {}", id, name);
+}
 
 pub fn move_players(
     game_input: Res<GameInputManager>,
@@ -361,6 +446,7 @@ pub fn attract_ball(
 pub fn detect_slide(
     game_input: Res<GameInputManager>,
     config: Res<GameConfig>,
+    tick: Res<GameTick>,
     mut player_query: Query<&mut Player>,
     sphere_query: Query<(&Velocity, &Transform), With<Sphere>>,
 ) {
@@ -378,6 +464,16 @@ pub fn detect_slide(
 
                         player.stamin -= config.slide_stamin_cost;
                         player.slide_cube_active = true;
+
+                        // Activar movimiento visual
+                        if let Some(movement) = get_movement(movement_ids::SLIDE_CUBE_GROW) {
+                            let duration_ticks = (movement.duration * TICK_RATE as f32) as u32;
+                            player.active_movement = Some(PlayerMovement {
+                                movement_id: movement_ids::SLIDE_CUBE_GROW,
+                                start_tick: tick.0,
+                                end_tick: tick.0 + duration_ticks,
+                            });
+                        }
                     }
                 }
             }
@@ -389,6 +485,7 @@ pub fn execute_slide(
     mut commands: Commands,
     config: Res<GameConfig>,
     time: Res<Time>,
+    tick: Res<GameTick>,
     mut player_query: Query<&mut Player>,
     sphere_query: Query<&Transform, (With<Sphere>, Without<SlideCube>)>,
     mut cube_query: Query<
@@ -446,6 +543,16 @@ pub fn execute_slide(
                 player.slide_cube_offset = Vec2::ZERO; // Reset final
                 if let Ok((cube_entity, _, _)) = cube_query.get_mut(player.slide_cube) {
                     commands.entity(cube_entity).remove::<Collider>();
+                }
+
+                // Activar movimiento de reducción
+                if let Some(movement) = get_movement(movement_ids::SLIDE_CUBE_SHRINK) {
+                    let duration_ticks = (movement.duration * TICK_RATE as f32) as u32;
+                    player.active_movement = Some(PlayerMovement {
+                        movement_id: movement_ids::SLIDE_CUBE_SHRINK,
+                        start_tick: tick.0,
+                        end_tick: tick.0 + duration_ticks,
+                    });
                 }
             }
         }

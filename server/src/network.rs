@@ -5,6 +5,7 @@ use shared::*;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
+use crate::engine::spawn_physics;
 use crate::{
     Ball, BroadcastTimer, GameInputManager, GameTick, LoadedMap, NetworkEvent, NetworkReceiver,
     NetworkSender, NetworkState, OutgoingMessage, Player, SlideCube, Sphere,
@@ -204,82 +205,7 @@ pub fn process_network_messages(
                     });
                 }
 
-                // Spawn física del jugador (Sphere) - igual estructura que RustBall
-                let spawn_x = ((id % 3) as f32 - 1.0) * 200.0;
-                let spawn_y = ((id / 3) as f32 - 1.0) * 200.0;
-
-                let sphere_entity = commands
-                    .spawn((
-                        Sphere,
-                        TransformBundle::from_transform(Transform::from_xyz(spawn_x, spawn_y, 0.0)),
-                        RigidBody::Dynamic,
-                        Collider::ball(config.sphere_radius),
-                        Velocity::zero(),
-                        // Jugador: colisiona con todo EXCEPTO líneas solo-pelota (GROUP_5)
-                        CollisionGroups::new(Group::GROUP_4, Group::ALL ^ Group::GROUP_5),
-                        SolverGroups::new(Group::GROUP_4, Group::ALL ^ Group::GROUP_5),
-                        Friction {
-                            coefficient: config.sphere_friction,
-                            combine_rule: CoefficientCombineRule::Min,
-                        },
-                        Restitution {
-                            coefficient: config.sphere_restitution,
-                            combine_rule: CoefficientCombineRule::Average,
-                        },
-                        Damping {
-                            linear_damping: config.sphere_linear_damping,
-                            angular_damping: config.sphere_angular_damping,
-                        },
-                        ExternalImpulse::default(),
-                        ExternalForce::default(),
-                    ))
-                    .id();
-
-                // Spawn del cubo de dirección/slide (inicialmente sin física)
-                let cube_size = config.sphere_radius / 3.0;
-                let cube_offset = Vec2::new(config.sphere_radius * 0.7, 0.0);
-
-                let slide_cube_entity = commands
-                    .spawn((
-                        SlideCube { owner_id: id },
-                        TransformBundle::from_transform(
-                            Transform::from_xyz(
-                                spawn_x + cube_offset.x,
-                                spawn_y + cube_offset.y,
-                                0.0,
-                            )
-                            .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4))
-                            .with_scale(Vec3::splat(1.0)),
-                        ),
-                    ))
-                    .id();
-
-                // Asignar equipo basado en ID (par = 0, impar = 1)
-                let team_index = (id % 2) as u8;
-
-                // Spawn lógica del jugador (Player) - Usando peer_id ahora
-                commands.spawn(Player {
-                    sphere: sphere_entity,
-                    slide_cube: slide_cube_entity,
-                    id,
-                    name: name.clone(),
-                    kick_charge: 0.0,
-                    kick_charging: false,
-                    peer_id,
-                    is_ready: false,
-                    not_interacting: false,
-                    is_sliding: false,
-                    slide_direction: Vec2::ZERO,
-                    slide_timer: 0.0,
-                    ball_target_position: None,
-                    stamin: 1.0,
-                    slide_cube_active: false,
-                    slide_cube_offset: cube_offset,
-                    slide_cube_scale: 1.0,
-                    team_index,
-                });
-
-                println!("✅ Jugador {} spawneado: {}", id, name);
+                spawn_physics(&mut commands, id, name, peer_id, &config);
             }
 
             NetworkEvent::PlayerInput { peer_id, input } => {
@@ -360,9 +286,7 @@ pub fn broadcast_game_state(
                     not_interacting: player.not_interacting,
                     ball_target_position: player.ball_target_position,
                     stamin_charge: player.stamin,
-                    slide_cube_active: player.slide_cube_active,
-                    slide_cube_offset: player.slide_cube_offset,
-                    slide_cube_scale: player.slide_cube_scale,
+                    active_movement: player.active_movement.clone(),
                     team_index: player.team_index,
                 })
             } else {

@@ -7,8 +7,17 @@ use matchbox_socket::WebRtcSocket;
 use shared::protocol::{
     ControlMessage, GameConfig, GameDataMessage, NetworkInputType, PlayerInput, ServerMessage,
 };
+use shared::movements::{get_movement, AnimatedProperty};
+use shared::protocol::PlayerMovement;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+
+// ============================================================================
+// RECURSO PARA MOVIMIENTOS ACTIVOS
+// ============================================================================
+
+#[derive(Resource, Default)]
+struct GameTick(u32);
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "Haxball Client")]
@@ -160,6 +169,7 @@ fn main() {
         .insert_resource(MyPlayerId(None))
         .insert_resource(LoadedMap::default())
         .insert_resource(PreviousInput::default())
+        .insert_resource(GameTick::default())
         .insert_resource(DoubleTapTracker {
             last_space_press: -999.0,
         })
@@ -191,7 +201,7 @@ fn main() {
                 camera_zoom_control,
                 update_charge_bar,
                 update_player_sprite,
-                update_slide_cube,
+                process_movements,
                 update_target_ball_position,
                 update_dash_cooldown,
             )
@@ -246,10 +256,7 @@ struct RemotePlayer {
     base_color: Color,
     ball_target_position: Option<Vec2>,
     stamin_charge: f32,
-    // Slide cube state
-    slide_cube_active: bool,
-    slide_cube_offset: Vec2,
-    slide_cube_scale: f32,
+    active_movement: Option<PlayerMovement>,
 }
 
 #[derive(Component)]
@@ -737,6 +744,7 @@ fn process_network_messages(
     player_materials: Query<(&PlayerSprite, &Handle<ColorMaterial>)>,
     children_query: Query<&Children>,
     mut text_query: Query<&mut Text>,
+    mut game_tick: ResMut<GameTick>,
 ) {
     let Some(ref receiver) = channels.receiver else {
         return;
@@ -744,8 +752,9 @@ fn process_network_messages(
     let mut rx = receiver.lock().unwrap();
     let mut spawned_this_frame = std::collections::HashSet::new();
 
-    // Procesar solo el último GameState si hay múltiples
+    // Procesar solo el último GameState si hay múltiples (incluye tick)
     let mut last_game_state: Option<(
+        u32, // tick
         Vec<shared::protocol::PlayerState>,
         shared::protocol::BallState,
     )> = None;
@@ -798,7 +807,7 @@ fn process_network_messages(
                     println!("📥 [Bevy] Primer GameState recibido: {} jugadores, pelota en ({:.0}, {:.0})",
                         players.len(), ball.position.0, ball.position.1);
                 }
-                last_game_state = Some((players, ball));
+                last_game_state = Some((tick, players, ball));
             }
             ServerMessage::ChangeTeamColor { team_index, color } => {
                 println!(
@@ -852,7 +861,8 @@ fn process_network_messages(
     }
 
     // Procesar solo el último GameState si existe
-    if let Some((players, ball)) = last_game_state {
+    if let Some((tick, players, ball)) = last_game_state {
+        game_tick.0 = tick;
         // Actualizar Pelota
         let ball_exists = !ball_q.is_empty();
         if ball_exists {
@@ -907,11 +917,7 @@ fn process_network_messages(
                     rp.is_sliding = ps.is_sliding;
                     rp.ball_target_position = ps.ball_target_position;
                     rp.stamin_charge = ps.stamin_charge;
-                    rp.slide_cube_active = ps.slide_cube_active;
-                    rp.slide_cube_offset = ps.slide_cube_offset;
-                    rp.slide_cube_scale = ps.slide_cube_scale;
-
-                    // El jugador mantiene su forma circular, el cubo se maneja aparte
+                    rp.active_movement = ps.active_movement.clone();
 
                     found = true;
                     break;
@@ -943,9 +949,7 @@ fn process_network_messages(
                             base_color: player_color,
                             ball_target_position: ps.ball_target_position,
                             stamin_charge: ps.stamin_charge,
-                            slide_cube_active: ps.slide_cube_active,
-                            slide_cube_offset: ps.slide_cube_offset,
-                            slide_cube_scale: ps.slide_cube_scale,
+                            active_movement: ps.active_movement.clone(),
                         },
                         Collider::ball(config.sphere_radius), // Para debug rendering
                         Interpolated {
@@ -983,12 +987,12 @@ fn process_network_messages(
                             PlayerSprite { parent_id: ps.id },
                         ));
 
-                        // Indicador de dirección / Slide cube
+                        // Indicador de dirección (cubo pequeño hacia adelante)
                         let indicator_size = radius / 3.0;
-                        // Usar offset del servidor o valor por defecto
-                        let indicator_x = ps.slide_cube_offset.x;
-                        let indicator_y = ps.slide_cube_offset.y;
-                        let cube_scale = ps.slide_cube_scale;
+                        // Posición fija hacia adelante del jugador
+                        let indicator_x = radius * 0.7;
+                        let indicator_y = 0.0;
+                        let cube_scale = 1.0; // Escala inicial, modificable por movimientos
 
                         // Mesh personalizado: cuadrado con 4 vértices (LineStrip)
                         let half = indicator_size / 2.0;
@@ -1358,35 +1362,74 @@ fn update_player_sprite(
     }
 }
 
-// Sistema para actualizar el slide cube según el estado del servidor
-fn update_slide_cube(
-    player_query: Query<(&RemotePlayer, &Transform)>,
-    mut cube_query: Query<(&SlideCubeVisual, &mut Transform), Without<RemotePlayer>>,
+// Sistema para procesar movimientos activos y actualizar el cubo de dirección
+fn process_movements(
+    game_tick: Res<GameTick>,
+    player_query: Query<(&RemotePlayer, &Children)>,
+    mut cube_query: Query<(&SlideCubeVisual, &mut Transform)>,
+    config: Res<GameConfig>,
 ) {
-    for (cube_visual, mut cube_transform) in cube_query.iter_mut() {
-        // Buscamos al jugador dueño de este cubo
-        if let Some((player, player_transform)) = player_query
-            .iter()
-            .find(|(p, _)| p.id == cube_visual.parent_id)
-        {
-            // Si el cubo NO es hijo jerárquico en Bevy, debemos sumar la posición del jugador:
-            let player_pos = player_transform.translation.truncate();
+    let current_tick = game_tick.0;
 
-            // Actualizamos la posición absoluta basándonos en el offset que viene del servidor
-            cube_transform.translation.x = player_pos.x + player.slide_cube_offset.x;
-            cube_transform.translation.y = player_pos.y + player.slide_cube_offset.y;
-            cube_transform.translation.z = 2.0;
+    for (player, children) in player_query.iter() {
+        // Obtener el movimiento activo del jugador (si existe)
+        let Some(ref active_movement) = player.active_movement else {
+            continue;
+        };
 
-            cube_transform.scale = Vec3::splat(player.slide_cube_scale);
+        // Calcular progreso basado en ticks
+        let start = active_movement.start_tick;
+        let end = active_movement.end_tick;
 
-            // Rotación alineada con el offset (hacia donde fue la barrida)
-            if player.slide_cube_active {
-                let angle = player.slide_cube_offset.y.atan2(player.slide_cube_offset.x);
-                cube_transform.rotation =
-                    Quat::from_rotation_z(angle + std::f32::consts::FRAC_PI_4);
-            } else {
-                // Invisible o en posición de reposo
-                cube_transform.scale = Vec3::ZERO;
+        // Si ya pasó el end_tick, el movimiento terminó
+        if current_tick >= end {
+            continue;
+        }
+
+        // Si aún no llegamos al start_tick, no ejecutar
+        if current_tick < start {
+            continue;
+        }
+
+        // Calcular progreso (0.0 a 1.0)
+        let duration = (end - start) as f32;
+        let elapsed = (current_tick - start) as f32;
+        let progress = (elapsed / duration).clamp(0.0, 1.0);
+
+        // Obtener el movimiento desde el catálogo compartido
+        let Some(movement) = get_movement(active_movement.movement_id) else {
+            continue;
+        };
+
+        // Buscar el cubo hijo de este jugador
+        for &child in children.iter() {
+            if let Ok((cube_visual, mut cube_transform)) = cube_query.get_mut(child) {
+                if cube_visual.parent_id != player.id {
+                    continue;
+                }
+
+                // Evaluar cada propiedad animada usando keyframes
+                // Scale
+                if let Some(scale) = movement.evaluate(AnimatedProperty::Scale, progress) {
+                    cube_transform.scale = Vec3::splat(scale);
+                }
+
+                // OffsetX (multiplicador del radio)
+                if let Some(offset_mult) = movement.evaluate(AnimatedProperty::OffsetX, progress) {
+                    cube_transform.translation.x = config.sphere_radius * offset_mult;
+                }
+
+                // OffsetY (multiplicador del radio)
+                if let Some(offset_mult) = movement.evaluate(AnimatedProperty::OffsetY, progress) {
+                    cube_transform.translation.y = config.sphere_radius * offset_mult;
+                }
+
+                // Rotación adicional (se suma a la base de 45°)
+                if let Some(rotation) = movement.evaluate(AnimatedProperty::Rotation, progress) {
+                    cube_transform.rotation = Quat::from_rotation_z(
+                        std::f32::consts::FRAC_PI_4 + rotation,
+                    );
+                }
             }
         }
     }
