@@ -219,6 +219,10 @@ impl GameInputManager {
         self.sources.insert(player_id, NetworkInputSource::new());
     }
 
+    pub fn remove_player(&mut self, player_id: u32) {
+        self.sources.remove(&player_id);
+    }
+
     pub fn update_input(&mut self, player_id: u32, input: PlayerInput) {
         if let Some(source) = self.sources.get_mut(&player_id) {
             source.set_input(input);

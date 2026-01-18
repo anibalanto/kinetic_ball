@@ -212,7 +212,14 @@ pub fn process_network_messages(
                 // Buscar el player_id real usando el peer_id
                 for (player, _) in players.iter() {
                     if player.peer_id == peer_id {
-                        game_input.update_input(player.id, input);
+                        // Log de inputs con movimiento
+                        if input.move_up || input.move_down || input.move_left || input.move_right {
+                            println!(
+                                "🎮 [{}] up={} down={} left={} right={}",
+                                player.name, input.move_up, input.move_down, input.move_left, input.move_right
+                            );
+                        }
+                        game_input.update_input(player.id, input.clone());
                         break;
                     }
                 }
@@ -221,10 +228,23 @@ pub fn process_network_messages(
             NetworkEvent::PlayerDisconnected { peer_id } => {
                 for (player, entity) in players.iter() {
                     if player.peer_id == peer_id {
-                        // Despawnear tanto Player como Sphere (igual que RustBall)
-                        commands.entity(player.sphere).despawn();
-                        commands.entity(entity).despawn();
-                        println!("❌ Jugador {} removido", player.id);
+                        // Notificar a todos los clientes que este jugador se desconectó
+                        let disconnect_msg = ControlMessage::PlayerDisconnected {
+                            player_id: player.id,
+                        };
+                        if let Ok(data) = bincode::serialize(&disconnect_msg) {
+                            let _ = network_tx.0.send(OutgoingMessage::Broadcast {
+                                channel: 0, // Canal reliable
+                                data,
+                            });
+                        }
+
+                        // Despawnear tanto Player como Sphere con todos sus hijos
+                        commands.entity(player.sphere).despawn_recursive();
+                        commands.entity(entity).despawn_recursive();
+                        // Remover del GameInputManager
+                        game_input.remove_player(player.id);
+                        println!("❌ Jugador {} ({}) desconectado y removido", player.name, player.id);
                         break;
                     }
                 }

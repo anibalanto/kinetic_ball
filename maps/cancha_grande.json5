@@ -1,70 +1,70 @@
 {
   name: "Cancha Grande",
-  width: 1400,
-  height: 800,
+  width: 3000,
+  height: 2000,
 
   bg: {
     type: "grass",
-    width: 1300,
-    height: 700,
+    width: 3000,
+    height: 2000,
     color: "3a7d44"
   },
 
   // Vertices del campo
   vertexes: [
     // Esquinas externas del campo (0-3)
-    { x: -1300, y: -700 },   // 0: Esquina inferior izquierda
-    { x: 1300, y: -700 },    // 1: Esquina inferior derecha
-    { x: 1300, y: 700 },     // 2: Esquina superior derecha
-    { x: -1300, y: 700 },    // 3: Esquina superior izquierda
+    { x: -1500, y: -1000 },   // 0: Esquina inferior izquierda
+    { x: 1500, y: -1000 },    // 1: Esquina inferior derecha
+    { x: 1500, y: 1000 },     // 2: Esquina superior derecha
+    { x: -1500, y: 1000 },    // 3: Esquina superior izquierda
 
     // Linea central (4-5)
-    { x: 0, y: -700 },       // 4: Centro inferior
-    { x: 0, y: 700 },        // 5: Centro superior
+    { x: 0, y: -1000 },       // 4: Centro inferior
+    { x: 0, y: 1000 },        // 5: Centro superior
 
     // Area izquierda (6-9)
-    { x: -1300, y: -300 },   // 6: Area izq inferior
-    { x: -1050, y: -300 },   // 7: Area izq inferior interior
-    { x: -1050, y: 300 },    // 8: Area izq superior interior
-    { x: -1300, y: 300 },    // 9: Area izq superior
+    { x: -1400, y: -900 },   // 6: Area izq inferior
+    { x: -1350, y: -900 },   // 7: Area izq inferior interior
+    { x: -1350, y: 900 },    // 8: Area izq superior interior
+    { x: -1400, y: 900 },    // 9: Area izq superior
 
     // Area derecha (10-13)
-    { x: 1300, y: -300 },    // 10: Area der inferior
-    { x: 1050, y: -300 },    // 11: Area der inferior interior
-    { x: 1050, y: 300 },     // 12: Area der superior interior
-    { x: 1300, y: 300 },     // 13: Area der superior
+    { x: 1400, y: -900 },    // 10: Area der inferior
+    { x: 1350, y: -900 },    // 11: Area der inferior interior
+    { x: 1350, y: 900 },     // 12: Area der superior interior
+    { x: 1400, y: 900 },     // 13: Area der superior
 
     // Arco izquierdo - postes (14-17)
-    { x: -1300, y: -200 },   // 14: Poste inferior arco izq (interior)
-    { x: -1380, y: -200 },   // 15: Poste inferior arco izq (exterior)
-    { x: -1380, y: 200 },    // 16: Poste superior arco izq (exterior)
-    { x: -1300, y: 200 },    // 17: Poste superior arco izq (interior)
+    { x: -1500, y: -800 },   // 14: Poste inferior arco izq (interior)
+    { x: -1580, y: -800 },   // 15: Poste inferior arco izq (exterior)
+    { x: -1580, y: 800 },    // 16: Poste superior arco izq (exterior)
+    { x: -1500, y: 800 },    // 17: Poste superior arco izq (interior)
 
     // Arco derecho - postes (18-21)
-    { x: 1300, y: -200 },    // 18: Poste inferior arco der (interior)
-    { x: 1380, y: -200 },    // 19: Poste inferior arco der (exterior)
-    { x: 1380, y: 200 },     // 20: Poste superior arco der (exterior)
-    { x: 1300, y: 200 },     // 21: Poste superior arco der (interior)
+    { x: 1500, y: -800 },    // 18: Poste inferior arco der (interior)
+    { x: 1580, y: -800 },    // 19: Poste inferior arco der (exterior)
+    { x: 1580, y: 800 },     // 20: Poste superior arco der (exterior)
+    { x: 1500, y: 800 },     // 21: Poste superior arco der (interior)
   ],
 
   segments: [
     // === PAREDES EXTERNAS (con colision) ===
     // Pared inferior (desde esquina izq hasta arco izq)
-    { v0: 0, v1: 14, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
+    //{ v0: 0, v1: 14, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
     // Pared inferior (desde arco izq hasta arco der)
-    { v0: 14, v1: 18, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
+    //{ v0: 14, v1: 18, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
     // Pared inferior (desde arco der hasta esquina der)
-    { v0: 18, v1: 1, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
+    //{ v0: 18, v1: 1, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
 
     // Pared derecha
     { v0: 1, v1: 2, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
 
     // Pared superior (desde esquina der hasta arco der)
-    { v0: 2, v1: 21, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
+    //{ v0: 2, v1: 21, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
     // Pared superior (desde arco der hasta arco izq)
-    { v0: 21, v1: 17, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
+    //{ v0: 21, v1: 17, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
     // Pared superior (desde arco izq hasta esquina izq)
-    { v0: 17, v1: 3, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
+    //{ v0: 17, v1: 3, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
 
     // Pared izquierda
     { v0: 3, v1: 0, bCoef: 0.8, cMask: ["ball", "red", "blue"], color: "ffffff" },
@@ -81,7 +81,7 @@
 
     // === LINEAS INTERNAS (sin colision - solo visuales) ===
     // Linea central
-    { v0: 4, v1: 5, vis: true, color: "ffffff" },
+    //{ v0: 4, v1: 5, vis: true, color: "ffffff" },
 
     // Area izquierda
     { v0: 6, v1: 7, vis: true, color: "ffffff" },   // Linea inferior
@@ -97,18 +97,18 @@
   // Discos para las esquinas redondeadas y postes
   discs: [
     // Esquinas del campo
-    { pos: [-1300, -700], radius: 15, bCoef: 1.0, cMask: ["ball", "red", "blue"], color: "ffffff" },
-    { pos: [1300, -700], radius: 15, bCoef: 1.0, cMask: ["ball", "red", "blue"], color: "ffffff" },
-    { pos: [1300, 700], radius: 15, bCoef: 1.0, cMask: ["ball", "red", "blue"], color: "ffffff" },
-    { pos: [-1300, 700], radius: 15, bCoef: 1.0, cMask: ["ball", "red", "blue"], color: "ffffff" },
+    { pos: [-1500, -1000], radius: 15, bCoef: 1.0, cMask: ["ball", "red", "blue"], color: "ffffff" },
+    { pos: [1500, -1000], radius: 15, bCoef: 1.0, cMask: ["ball", "red", "blue"], color: "ffffff" },
+    { pos: [1500, 1000], radius: 15, bCoef: 1.0, cMask: ["ball", "red", "blue"], color: "ffffff" },
+    { pos: [-1500, 1000], radius: 15, bCoef: 1.0, cMask: ["ball", "red", "blue"], color: "ffffff" },
 
-    // Postes arco izquierdo
-    { pos: [-1300, -200], radius: 12, bCoef: 1.2, cMask: ["ball", "red", "blue"], color: "ff0000" },
-    { pos: [-1300, 200], radius: 12, bCoef: 1.2, cMask: ["ball", "red", "blue"], color: "ff0000" },
+    // Postes arco iz8quierdo
+    { pos: [-1500, -200], radius: 12, bCoef: 1.2, cMask: ["ball", "red", "blue"], color: "ff0000" },
+    { pos: [-1500, 800], radius: 12, bCoef: 1.2, cMask: ["ball", "red", "blue"], color: "ff0000" },
 
     // Postes arco derecho
-    { pos: [1300, -200], radius: 12, bCoef: 1.2, cMask: ["ball", "red", "blue"], color: "0000ff" },
-    { pos: [1300, 200], radius: 12, bCoef: 1.2, cMask: ["ball", "red", "blue"], color: "0000ff" },
+    { pos: [1500, -800], radius: 12, bCoef: 1.2, cMask: ["ball", "red", "blue"], color: "0000ff" },
+    { pos: [1500, 800], radius: 12, bCoef: 1.2, cMask: ["ball", "red", "blue"], color: "0000ff" },
 
     // Circulo central (solo visual, sin colision)
     { pos: [0, 0], radius: 150, bCoef: 0, color: "ffffff" },
@@ -116,7 +116,7 @@
 
   // Lineas de gol
   goals: [
-    { p0: [-1300, -200], p1: [-1300, 200], team: "red" },
-    { p0: [1300, -200], p1: [1300, 200], team: "blue" },
+    { p0: [-1500, -800], p1: [-1500, 800], team: "red" },
+    { p0: [1500, -800], p1: [1500, 800], team: "blue" },
   ]
 }

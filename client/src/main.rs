@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use bevy::render::render_asset::RenderAssetUsages;
+use bevy::render::texture::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_rapier2d::prelude::*;
@@ -11,6 +13,12 @@ use shared::protocol::{
 };
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
+
+// ============================================================================
+// ASSETS EMBEBIDOS EN EL BINARIO
+// ============================================================================
+
+const BALL_PNG: &[u8] = include_bytes!("../assets/ball.png");
 
 // ============================================================================
 // RECURSO PARA MOVIMIENTOS ACTIVOS
@@ -173,6 +181,8 @@ fn main() {
         .insert_resource(DoubleTapTracker {
             last_space_press: -999.0,
         })
+        // Cargar assets embebidos al inicio (antes de todo)
+        .add_systems(Startup, load_embedded_assets)
         // Sistemas de menú (solo en estado Menu)
         .add_systems(OnEnter(AppState::Menu), setup_menu_camera)
         .add_systems(Update, menu_ui.run_if(in_state(AppState::Menu)))
@@ -215,6 +225,12 @@ fn main() {
 // ============================================================================
 // RECURSOS
 // ============================================================================
+
+/// Assets embebidos cargados en memoria
+#[derive(Resource, Default)]
+struct EmbeddedAssets {
+    ball_texture: Handle<Image>,
+}
 
 #[derive(Resource, Default)]
 struct NetworkChannels {
@@ -307,6 +323,27 @@ struct SlideCubeVisual {
 
 fn setup_menu_camera(mut commands: Commands) {
     commands.spawn((Camera2dBundle::default(), MenuCamera));
+}
+
+/// Carga los assets embebidos en memoria al iniciar la aplicación
+fn load_embedded_assets(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    let ball_image = Image::from_buffer(
+        BALL_PNG,
+        ImageType::Extension("png"),
+        CompressedImageFormats::default(),
+        true,
+        ImageSampler::default(),
+        RenderAssetUsages::default(),
+    )
+    .expect("Failed to load embedded ball.png");
+
+    let ball_handle = images.add(ball_image);
+
+    commands.insert_resource(EmbeddedAssets {
+        ball_texture: ball_handle,
+    });
+
+    println!("✅ Assets embebidos cargados en memoria");
 }
 
 fn menu_ui(
@@ -504,6 +541,10 @@ async fn start_webrtc_client(
                             println!("📤 [Red -> Servidor] Enviando READY...");
                             socket.channel_mut(0).send(data.into(), peer_id);
                         }
+                    }
+                    ControlMessage::PlayerDisconnected { player_id } => {
+                        println!("👋 [Red] Jugador {} se desconectó", player_id);
+                        let _ = network_tx.send(ServerMessage::PlayerDisconnected { player_id });
                     }
                     _ => {}
                 }
@@ -721,7 +762,7 @@ fn handle_input(
 
 fn process_network_messages(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    embedded_assets: Res<EmbeddedAssets>,
     mut config: ResMut<GameConfig>,
     channels: Res<NetworkChannels>,
     mut my_id: ResMut<MyPlayerId>,
@@ -731,6 +772,7 @@ fn process_network_messages(
     mut ball_q: Query<(&mut Interpolated, &mut Transform, &RemoteBall), Without<RemotePlayer>>,
     mut players_q: Query<
         (
+            Entity,
             &mut Interpolated,
             &mut Transform,
             &mut RemotePlayer,
@@ -829,7 +871,7 @@ fn process_network_messages(
                     get_team_colors(team_index, &config.team_colors);
 
                 // 3. Actualizar jugadores de ese equipo
-                for (_, _, player, _, children) in players_q.iter() {
+                for (_, _, _, player, _, children) in players_q.iter() {
                     if player.team_index != team_index {
                         continue;
                     }
@@ -860,6 +902,16 @@ fn process_network_messages(
                     }
                 }
             }
+            ServerMessage::PlayerDisconnected { player_id } => {
+                // Buscar y eliminar el jugador desconectado
+                for (entity, _, _, rp, _, _) in players_q.iter() {
+                    if rp.id == player_id {
+                        commands.entity(entity).despawn_recursive();
+                        println!("👋 [Bevy] Jugador {} eliminado del juego", player_id);
+                        break;
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -867,6 +919,7 @@ fn process_network_messages(
     // Procesar solo el último GameState si existe
     if let Some((tick, players, ball)) = last_game_state {
         game_tick.0 = tick;
+
         // Actualizar Pelota
         let ball_exists = !ball_q.is_empty();
         if ball_exists {
@@ -896,7 +949,7 @@ fn process_network_messages(
                 ))
                 .with_children(|parent| {
                     parent.spawn(SpriteBundle {
-                        texture: asset_server.load("ball.png"),
+                        texture: embedded_assets.ball_texture.clone(),
                         sprite: Sprite {
                             custom_size: Some(Vec2::splat(config.ball_radius * 2.0)),
                             ..default()
@@ -910,7 +963,7 @@ fn process_network_messages(
         // Actualizar Jugadores
         for ps in players {
             let mut found = false;
-            for (mut interp, mut transform, mut rp, mut collider, _children) in players_q.iter_mut()
+            for (_entity, mut interp, mut transform, mut rp, mut collider, _children) in players_q.iter_mut()
             {
                 if rp.id == ps.id {
                     interp.target_position = ps.position;

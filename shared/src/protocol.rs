@@ -260,7 +260,7 @@ impl Default for GameConfig {
             ],
 
             // Velocidades básicas
-            player_speed: 375.0,
+            player_speed: 385.0,
             walk_coeficient: 0.70,
             run_coeficient: 1.0,
             kick_force: 800.0,
