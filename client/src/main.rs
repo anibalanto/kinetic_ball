@@ -4,11 +4,11 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
 use matchbox_socket::WebRtcSocket;
+use shared::movements::{get_movement, AnimatedProperty};
+use shared::protocol::PlayerMovement;
 use shared::protocol::{
     ControlMessage, GameConfig, GameDataMessage, NetworkInputType, PlayerInput, ServerMessage,
 };
-use shared::movements::{get_movement, AnimatedProperty};
-use shared::protocol::PlayerMovement;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -740,7 +740,10 @@ fn process_network_messages(
         (Without<RemoteBall>, Without<MainCamera>),
     >,
     // Queries para actualizar colores de equipo
-    mut bar_sprites: Query<&mut Sprite, Or<(With<KickChargeBarCurveLeft>, With<KickChargeBarCurveRight>)>>,
+    mut bar_sprites: Query<
+        &mut Sprite,
+        Or<(With<KickChargeBarCurveLeft>, With<KickChargeBarCurveRight>)>,
+    >,
     player_materials: Query<(&PlayerSprite, &Handle<ColorMaterial>)>,
     children_query: Query<&Children>,
     mut text_query: Query<&mut Text>,
@@ -822,7 +825,8 @@ fn process_network_messages(
                 config.team_colors[team_index as usize] = color;
 
                 // 2. Calcular nuevos colores
-                let (player_color, opposite_color) = get_team_colors(team_index, &config.team_colors);
+                let (player_color, opposite_color) =
+                    get_team_colors(team_index, &config.team_colors);
 
                 // 3. Actualizar jugadores de ese equipo
                 for (_, _, player, _, children) in players_q.iter() {
@@ -906,7 +910,8 @@ fn process_network_messages(
         // Actualizar Jugadores
         for ps in players {
             let mut found = false;
-            for (mut interp, mut transform, mut rp, mut collider, _children) in players_q.iter_mut() {
+            for (mut interp, mut transform, mut rp, mut collider, _children) in players_q.iter_mut()
+            {
                 if rp.id == ps.id {
                     interp.target_position = ps.position;
                     interp.target_velocity = Vec2::new(ps.velocity.0, ps.velocity.1);
@@ -931,7 +936,8 @@ fn process_network_messages(
                 );
 
                 // Colores de equipo desde la configuración
-                let (player_color, opposite_color) = get_team_colors(ps.team_index, &config.team_colors);
+                let (player_color, opposite_color) =
+                    get_team_colors(ps.team_index, &config.team_colors);
 
                 // Igual que RustBall: usar textura con children
                 commands
@@ -1075,7 +1081,7 @@ fn process_network_messages(
                                     ),
                                     transform: Transform::from_xyz(
                                         config.ball_radius * 2.0,
-                                        -15.0,
+                                        -12.0,
                                         10.0,
                                     ),
                                     ..default()
@@ -1114,7 +1120,7 @@ fn process_network_messages(
                                     ),
                                     transform: Transform::from_xyz(
                                         config.ball_radius * 2.0,
-                                        15.0,
+                                        12.0,
                                         10.0,
                                     ),
                                     ..default()
@@ -1426,9 +1432,8 @@ fn process_movements(
 
                 // Rotación adicional (se suma a la base de 45°)
                 if let Some(rotation) = movement.evaluate(AnimatedProperty::Rotation, progress) {
-                    cube_transform.rotation = Quat::from_rotation_z(
-                        std::f32::consts::FRAC_PI_4 + rotation,
-                    );
+                    cube_transform.rotation =
+                        Quat::from_rotation_z(std::f32::consts::FRAC_PI_4 + rotation);
                 }
             }
         }

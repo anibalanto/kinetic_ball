@@ -235,6 +235,9 @@ pub struct GameConfig {
     pub slide_stamin_cost: f32,
     pub run_stamin_coeficient_cost: f32,
 
+    //Slide
+    pub speed_slide_coefficient: f32,
+
     // Map loading
     #[serde(default)]
     pub map_path: Option<String>,
@@ -297,7 +300,10 @@ impl Default for GameConfig {
             stamin: 1.0,
             dash_stamin_cost: 0.9,
             slide_stamin_cost: 0.6,
-            run_stamin_coeficient_cost: 0.2,
+            run_stamin_coeficient_cost: 0.1,
+
+            //Slide
+            speed_slide_coefficient: 2.0,
 
             // Map loading
             map_path: None,

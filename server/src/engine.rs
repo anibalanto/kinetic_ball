@@ -448,15 +448,17 @@ pub fn detect_slide(
     config: Res<GameConfig>,
     tick: Res<GameTick>,
     mut player_query: Query<&mut Player>,
-    sphere_query: Query<(&Velocity, &Transform), With<Sphere>>,
+    mut sphere_query: Query<(&mut Velocity, &Transform), With<Sphere>>,
 ) {
     for mut player in player_query.iter_mut() {
         if game_input.just_pressed(player.id, GameAction::Slide) {
             if config.slide_stamin_cost <= player.stamin && !player.is_sliding {
-                if let Ok((velocity, transform)) = sphere_query.get(player.sphere) {
+                if let Ok((mut velocity, transform)) = sphere_query.get_mut(player.sphere) {
                     if velocity.linvel.length() > 50.0 {
                         player.is_sliding = true;
                         player.slide_timer = 0.3; // Duración total
+
+                        velocity.linvel *= config.speed_slide_coefficient;
 
                         // DIRECCIÓN: Usamos la rotación actual (que mira a la pelota gracias a look_at_ball)
                         let (_, _, angle) = transform.rotation.to_euler(EulerRot::XYZ);
@@ -487,10 +489,17 @@ pub fn execute_slide(
     time: Res<Time>,
     tick: Res<GameTick>,
     mut player_query: Query<&mut Player>,
-    sphere_query: Query<&Transform, (With<Sphere>, Without<SlideCube>)>,
+    mut sphere_query: Query<
+        (&mut Velocity, &Transform),
+        (With<Sphere>, Without<SlideCube>, Without<Ball>),
+    >,
     mut cube_query: Query<
         (Entity, &mut Transform, Option<&Collider>),
-        (With<SlideCube>, Without<Sphere>),
+        (With<SlideCube>, Without<Sphere>, Without<Ball>),
+    >,
+    mut ball_query: Query<
+        (&Transform, &mut ExternalImpulse),
+        (With<Ball>, Without<Sphere>, Without<SlideCube>),
     >,
 ) {
     for mut player in player_query.iter_mut() {
@@ -498,7 +507,7 @@ pub fn execute_slide(
             continue;
         }
 
-        if let Ok(sphere_transform) = sphere_query.get(player.sphere) {
+        if let Ok((mut sphere_velocity, sphere_transform)) = sphere_query.get_mut(player.sphere) {
             let total_time = 0.3;
             let elapsed = total_time - player.slide_timer;
             let progress = (elapsed / total_time).clamp(0.0, 1.0);
@@ -521,16 +530,45 @@ pub fn execute_slide(
             if let Ok((cube_entity, mut cube_transform, maybe_collider)) =
                 cube_query.get_mut(player.slide_cube)
             {
-                // POSICIÓN MUNDIAL: Posición jugador + Offset
                 let player_pos = sphere_transform.translation.truncate();
                 cube_transform.translation = (player_pos + player.slide_cube_offset).extend(2.0);
                 cube_transform.scale = Vec3::splat(player.slide_cube_scale);
+
+                // --- HITBOX DE IMPULSO MANUAL ---
+                // Solo aplicamos el impulso en la fase de "ida" o "mantenimiento" (progress < 0.7)
+                if progress < 0.7 {
+                    for (ball_transform, mut ball_impulse) in ball_query.iter_mut() {
+                        let cube_pos = cube_transform.translation.truncate();
+                        let ball_pos = ball_transform.translation.truncate();
+                        let dist = cube_pos.distance(ball_pos);
+
+                        // Umbral de detección: tamaño del cubo + radio de la pelota
+                        let hit_threshold = (player.slide_cube_scale
+                            * (config.sphere_radius / 1.5))
+                            + config.ball_radius;
+
+                        if dist < hit_threshold {
+                            // Aplicamos un impulso masivo en la dirección de la barrida
+                            // Multiplicamos por un valor alto para que se note el impacto
+                            let slide_punch_force = 30000.0;
+                            ball_impulse.impulse = player.slide_direction * slide_punch_force;
+
+                            // Opcional: añadir un poco de "levantamiento" o efecto
+                            ball_impulse.torque_impulse = player.slide_direction.x * 500.0;
+                        }
+                    }
+                }
+                // --------------------------------
 
                 if maybe_collider.is_none() && progress > 0.1 {
                     let size = (config.sphere_radius / 1.5) * player.slide_cube_scale;
                     commands.entity(cube_entity).insert((
                         Collider::cuboid(size / 2.0, size / 2.0),
                         CollisionGroups::new(Group::GROUP_4, Group::GROUP_3),
+                        Restitution {
+                            coefficient: 1.5,
+                            combine_rule: CoefficientCombineRule::Max,
+                        },
                     ));
                 }
             }
@@ -554,6 +592,8 @@ pub fn execute_slide(
                         end_tick: tick.0 + duration_ticks,
                     });
                 }
+
+                sphere_velocity.linvel /= config.speed_slide_coefficient;
             }
         }
     }
