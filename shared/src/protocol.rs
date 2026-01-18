@@ -273,13 +273,13 @@ impl Default for GameConfig {
 
             // Propiedades de materiales
             ball_friction: 0.7,
-            ball_restitution: 0.4,
-            ball_mass: 0.3,
+            ball_restitution: 0.6,  // Más rebote (arcade)
+            ball_mass: 0.1,         // Más liviana (arcade)
             sphere_friction: 0.8,
             sphere_restitution: 0.4,
 
             // Propiedades de damping
-            ball_linear_damping: 1.2,
+            ball_linear_damping: 0.6, // Menos frenado (arcade)
             ball_angular_damping: 0.5,
             sphere_linear_damping: 8.0,
             sphere_angular_damping: 5.0,
