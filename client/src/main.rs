@@ -186,9 +186,6 @@ fn main() {
         .insert_resource(LoadedMap::default())
         .insert_resource(PreviousInput::default())
         .insert_resource(GameTick::default())
-        .insert_resource(DoubleTapTracker {
-            last_space_press: -999.0,
-        })
         // Keybindings configurables
         .insert_resource(load_keybindings())
         .insert_resource(SettingsUIState::default())
@@ -260,11 +257,6 @@ struct NetworkChannels {
 
 #[derive(Resource)]
 struct MyPlayerId(Option<u32>);
-
-#[derive(Resource)]
-struct DoubleTapTracker {
-    last_space_press: f32,
-}
 
 #[derive(Resource, Default)]
 struct LoadedMap(Option<shared::map::Map>);
@@ -891,8 +883,6 @@ fn handle_input(
     channels: Res<NetworkChannels>,
     my_player_id: Res<MyPlayerId>,
     mut previous_input: ResMut<PreviousInput>,
-    mut double_tap: ResMut<DoubleTapTracker>,
-    time: Res<Time>,
     keybindings: Res<KeyBindingsConfig>,
 ) {
     if my_player_id.0.is_none() {
@@ -903,21 +893,8 @@ fn handle_input(
         return;
     };
 
-    // Detectar doble tap de Space
-    let current_time = time.elapsed_secs();
-    let double_tap_window = 0.3; // 300ms para doble tap
-    let mut dash_detected = false;
-
-    if keyboard.just_pressed(keybindings.sprint.0) {
-        let time_since_last = current_time - double_tap.last_space_press;
-
-        if time_since_last < double_tap_window {
-            dash_detected = true;
-            println!("🏃 [Cliente] Doble tap detectado! Enviando slide=true");
-        }
-
-        double_tap.last_space_press = current_time;
-    }
+    // Detectar modificador (ControlLeft)
+    let modifier = keyboard.pressed(KeyCode::ControlLeft);
 
     // Mapeo de teclas configurable
     let input = PlayerInput {
@@ -925,13 +902,13 @@ fn handle_input(
         move_down: keyboard.pressed(keybindings.move_down.0),
         move_left: keyboard.pressed(keybindings.move_left.0),
         move_right: keyboard.pressed(keybindings.move_right.0),
-        kick: keyboard.pressed(keybindings.kick.0),
+        kick: keyboard.pressed(keybindings.kick.0) && !modifier,
         curve_left: keyboard.pressed(keybindings.curve_left.0),
         curve_right: keyboard.pressed(keybindings.curve_right.0),
         stop_interact: keyboard.pressed(keybindings.stop_interact.0),
-        sprint: keyboard.pressed(keybindings.sprint.0),
-        dash: dash_detected,
-        slide: keyboard.pressed(keybindings.slide.0),
+        sprint: keyboard.pressed(keybindings.sprint.0) && !modifier,
+        dash: modifier && keyboard.pressed(keybindings.sprint.0),
+        slide: modifier && keyboard.pressed(keybindings.kick.0),
     };
 
     // Enviamos input siempre, no solo cuando cambia (para mantener estado)

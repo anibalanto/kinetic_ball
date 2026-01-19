@@ -163,6 +163,7 @@ fn main() {
                 apply_magnus_effect,
                 attract_ball,
                 push_ball_on_contact,
+                auto_touch_ball_while_running,
                 dash_first_touch_ball,
                 broadcast_game_state,
                 recover_stamin,

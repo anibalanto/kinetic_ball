@@ -378,9 +378,7 @@ pub fn attract_ball(
         let player_id = player.id;
 
         // Con Sprint no hay interacción con la pelota
-        if game_input.is_pressed(player_id, GameAction::Sprint)
-            || game_input.is_pressed(player_id, GameAction::Kick)
-        {
+        if game_input.is_pressed(player_id, GameAction::Sprint) {
             continue;
         }
 
@@ -441,8 +439,9 @@ pub fn attract_ball(
     }
 }
 
-// Sistema de empuje: aplica impulso a la pelota cuando el jugador la toca mientras se mueve
+// Sistema de empuje al caminar: aplica impulso a la pelota cuando el jugador la toca mientras camina
 pub fn push_ball_on_contact(
+    game_input: Res<GameInputManager>,
     config: Res<GameConfig>,
     player_query: Query<&Player>,
     sphere_query: Query<(&Transform, &Velocity), (With<Sphere>, Without<Ball>)>,
@@ -454,6 +453,11 @@ pub fn push_ball_on_contact(
 
     for player in player_query.iter() {
         if player.not_interacting {
+            continue;
+        }
+
+        // Solo aplicar al caminar (sin Sprint) - al correr usa touch_ball_while_sprinting
+        if game_input.is_pressed(player.id, GameAction::Sprint) {
             continue;
         }
 
@@ -478,6 +482,43 @@ pub fn push_ball_on_contact(
                     let push_impulse =
                         push_direction * push_force * (player_speed / 100.0).min(3.0);
                     impulse.impulse += push_impulse;
+                }
+            }
+        }
+    }
+}
+
+pub fn auto_touch_ball_while_running(
+    game_input: Res<GameInputManager>,
+    config: Res<GameConfig>,
+    player_query: Query<&Player>,
+    sphere_query: Query<(&Transform, &Velocity), (With<Sphere>, Without<Ball>)>,
+    mut ball_query: Query<(&Transform, &mut Velocity), With<Ball>>,
+) {
+    let activation_radius = config.sphere_radius + config.ball_radius + 5.0;
+    let kick_force = 700.0;
+
+    for player in player_query.iter() {
+        if !game_input.is_pressed(player.id, GameAction::Sprint)
+            || game_input.is_pressed(player.id, GameAction::StopInteract)
+        {
+            continue;
+        }
+
+        if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
+            if player_velocity.linvel.length() < 1.0 {
+                continue;
+            }
+
+            for (ball_transform, mut ball_velocity) in ball_query.iter_mut() {
+                let p_pos = player_transform.translation.truncate();
+                let b_pos = ball_transform.translation.truncate();
+                let diff = b_pos - p_pos;
+                let current_dist = diff.length();
+
+                if current_dist < activation_radius {
+                    let kick_dir = diff.normalize_or_zero();
+                    ball_velocity.linvel = kick_dir * kick_force;
                 }
             }
         }
