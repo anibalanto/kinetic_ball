@@ -442,6 +442,49 @@ pub fn attract_ball(
     }
 }
 
+// Sistema de empuje: aplica impulso a la pelota cuando el jugador la toca mientras se mueve
+pub fn push_ball_on_contact(
+    config: Res<GameConfig>,
+    player_query: Query<&Player>,
+    sphere_query: Query<(&Transform, &Velocity), (With<Sphere>, Without<Ball>)>,
+    mut ball_query: Query<(&Transform, &mut ExternalImpulse), (With<Ball>, Without<Sphere>)>,
+) {
+    // Radio de contacto: cuando los colliders se tocan
+    let contact_radius = config.sphere_radius + config.ball_radius + 5.0;
+    let push_force = 8000.0; // Fuerza de empuje base
+
+    for player in player_query.iter() {
+        if player.not_interacting {
+            continue;
+        }
+
+        if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
+            let player_speed = player_velocity.linvel.length();
+
+            // Solo empujar si el jugador se está moviendo
+            if player_speed < 10.0 {
+                continue;
+            }
+
+            for (ball_transform, mut impulse) in ball_query.iter_mut() {
+                let diff = ball_transform.translation - player_transform.translation;
+                let distance = diff.truncate().length();
+
+                // Solo aplicar cuando están en contacto
+                if distance < contact_radius && distance > 1.0 {
+                    // Dirección del movimiento del jugador
+                    let push_direction = player_velocity.linvel.normalize_or_zero();
+
+                    // Impulso proporcional a la velocidad del jugador
+                    let push_impulse =
+                        push_direction * push_force * (player_speed / 100.0).min(3.0);
+                    impulse.impulse += push_impulse;
+                }
+            }
+        }
+    }
+}
+
 // Sistema de barrida: lee comando de slide del cliente y valida/ejecuta
 pub fn detect_slide(
     game_input: Res<GameInputManager>,

@@ -162,6 +162,7 @@ fn main() {
                 kick_ball,
                 apply_magnus_effect,
                 attract_ball,
+                push_ball_on_contact,
                 dash_first_touch_ball,
                 // update_ball_damping,
                 broadcast_game_state,

@@ -281,7 +281,7 @@ impl Default for GameConfig {
             // Propiedades de damping
             ball_linear_damping: 1.5, // Rozamiento moderado
             ball_angular_damping: 0.5,
-            sphere_linear_damping: 8.0,
+            sphere_linear_damping: 7.0,
             sphere_angular_damping: 5.0,
 
             // Fuerzas y efectos
