@@ -159,10 +159,12 @@ fn main() {
                 move_players,
                 handle_collision_player,
                 charge_kick,
-                kick_ball,
+                prepare_kick_ball,
+                detect_contact_and_kick,
                 apply_magnus_effect,
                 attract_ball,
                 push_ball_on_contact,
+                update_kick_memory_timer,
                 auto_touch_ball_while_running,
                 dash_first_touch_ball,
                 broadcast_game_state,
@@ -260,9 +262,10 @@ pub struct Player {
     pub slide_cube: Entity, // Referencia al cubo de dirección/slide
     pub id: u32,
     pub name: String,
-    pub kick_charge: f32,
+    pub kick_charge: Vec2, // x = potencia, y = curva (positivo derecha, negativo izquierda)
     pub kick_charging: bool,
-    pub peer_id: PeerId, // Matchbox peer ID para enviar mensajes
+    pub kick_memory_timer: f32, // Timer de 1 segundo para potencia memorizada
+    pub peer_id: PeerId,        // Matchbox peer ID para enviar mensajes
     pub is_ready: bool,
 
     pub not_interacting: bool,

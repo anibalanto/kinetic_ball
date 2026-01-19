@@ -165,7 +165,7 @@ pub struct PlayerState {
     pub position: Vec2,
     pub velocity: (f32, f32),
     pub rotation: f32,
-    pub kick_charge: f32,
+    pub kick_charge: Vec2, // x = potencia, y = curva
     pub kick_charging: bool,
     pub is_sliding: bool,
     pub not_interacting: bool,
@@ -220,7 +220,6 @@ pub struct GameConfig {
     // Fuerzas y efectos
     pub spin_transfer: f32,
     pub max_control_offset: f32,
-    pub kick_distance_threshold: f32,
     pub attract_min_distance: f32,
     pub attract_max_distance: f32,
 
@@ -264,7 +263,7 @@ impl Default for GameConfig {
             player_speed: 385.0,
             walk_coeficient: 0.70,
             run_coeficient: 1.0,
-            kick_force: 3000000.0,
+            kick_force: 2000000.0,
             attract_force: 800.0,
             magnus_coefficient: 33.0,
 
@@ -288,7 +287,6 @@ impl Default for GameConfig {
             // Fuerzas y efectos
             spin_transfer: 5.0,
             max_control_offset: 25.0,
-            kick_distance_threshold: 80.0,
             attract_min_distance: 35.0,
             attract_max_distance: 100.0,
 

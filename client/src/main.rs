@@ -278,7 +278,7 @@ struct MenuCamera;
 struct RemotePlayer {
     id: u32,
     team_index: u8,
-    kick_charge: f32,
+    kick_charge: Vec2, // x = potencia, y = curva
     is_sliding: bool,
     not_interacting: bool,
     base_color: Color,
@@ -1252,9 +1252,9 @@ fn process_network_messages(
                                 },
                                 Anchor::CENTER_LEFT,
                                 Transform {
-                                    translation: Vec3::new(0.0, -10.0, 30.0),
+                                    translation: Vec3::new(0.0, 10.0, 30.0),
                                     // Rotación hacia la izquierda (positiva en el eje Z)
-                                    rotation: Quat::from_rotation_z(-angle),
+                                    rotation: Quat::from_rotation_z(angle),
                                     ..default()
                                 },
                             ))
@@ -1266,7 +1266,7 @@ fn process_network_messages(
                                         ..default()
                                     },
                                     TextColor(opposite_color),
-                                    Transform::from_xyz(config.ball_radius * 2.0, -12.0, 10.0),
+                                    Transform::from_xyz(config.ball_radius * 2.0, 12.0, 10.0),
                                 ));
                             });
 
@@ -1281,9 +1281,9 @@ fn process_network_messages(
                                 },
                                 Anchor::CENTER_LEFT,
                                 Transform {
-                                    translation: Vec3::new(0.0, 10.0, 30.0),
+                                    translation: Vec3::new(0.0, -10.0, 30.0),
                                     // Rotación hacia la derecha (negativa en el eje Z)
-                                    rotation: Quat::from_rotation_z(angle),
+                                    rotation: Quat::from_rotation_z(-angle),
                                     ..default()
                                 },
                             ))
@@ -1295,7 +1295,7 @@ fn process_network_messages(
                                         ..default()
                                     },
                                     TextColor(opposite_color),
-                                    Transform::from_xyz(config.ball_radius * 2.0, 12.0, 10.0),
+                                    Transform::from_xyz(config.ball_radius * 2.0, -12.0, 10.0),
                                 ));
                             });
 
@@ -1456,30 +1456,23 @@ fn update_charge_bar(
             if let Ok(mut sprite) = sprite_query.get_mut(child) {
                 // 1. Caso: Barra Principal
                 if bar_main_q.contains(child) {
-                    sprite.custom_size = Some(Vec2::new(max_width * player.kick_charge + 5.0, 5.0));
-                    sprite.color = Color::srgb(1.0, 1.0 - player.kick_charge, 0.0);
+                    sprite.custom_size =
+                        Some(Vec2::new(max_width * player.kick_charge.x + 5.0, 5.0));
+                    sprite.color = Color::srgb(1.0, 1.0 - player.kick_charge.x, 0.0);
                 }
-                // 2. Caso: Curva Izquierda
+                // 2. Caso: Curva Izquierda (kick_charge.y < 0)
                 else if bar_left_q.contains(child) {
-                    let coeficient = if previous_input.0.curve_left {
-                        0.5
-                    } else {
-                        0.0
-                    };
+                    let coeficient = if player.kick_charge.y < 0.0 { 0.5 } else { 0.0 };
                     sprite.custom_size = Some(Vec2::new(
-                        max_width * player.kick_charge * coeficient + 5.0,
+                        max_width * player.kick_charge.x * coeficient + 5.0,
                         5.0,
                     ));
                 }
-                // 3. Caso: Curva Derecha
+                // 3. Caso: Curva Derecha (kick_charge.y > 0)
                 else if bar_right_q.contains(child) {
-                    let coeficient = if previous_input.0.curve_right {
-                        0.5
-                    } else {
-                        0.0
-                    };
+                    let coeficient = if player.kick_charge.y > 0.0 { 0.5 } else { 0.0 };
                     sprite.custom_size = Some(Vec2::new(
-                        max_width * player.kick_charge * coeficient + 5.0,
+                        max_width * player.kick_charge.x * coeficient + 5.0,
                         5.0,
                     ));
                 }
