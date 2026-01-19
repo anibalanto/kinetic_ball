@@ -263,7 +263,7 @@ impl Default for GameConfig {
             player_speed: 385.0,
             walk_coeficient: 0.70,
             run_coeficient: 1.0,
-            kick_force: 1000.0,
+            kick_force: 3000000.0,
             attract_force: 800.0,
             magnus_coefficient: 33.0,
 
@@ -272,7 +272,7 @@ impl Default for GameConfig {
             ball_radius: 15.0,
 
             // Propiedades de materiales
-            ball_friction: 0.7,
+            ball_friction: 0.3,
             ball_restitution: 0.6, // Más rebote (arcade)
             ball_mass: 0.1,        // Más liviana (arcade)
             sphere_friction: 0.8,

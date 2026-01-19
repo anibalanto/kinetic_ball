@@ -290,8 +290,7 @@ pub fn kick_ball(
                             }
 
                             // Aplicamos el impulso de salida
-                            impulse.impulse =
-                                direction * (player.kick_charge * config.kick_force * 2000.0);
+                            impulse.impulse = direction * (player.kick_charge * config.kick_force);
 
                             // Aplicamos el torque inicial (Spin)
                             let spin_force = final_curve * config.spin_transfer * 10.0;
