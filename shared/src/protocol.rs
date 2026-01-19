@@ -297,8 +297,8 @@ impl Default for GameConfig {
 
             //Dash time
             stamin: 1.0,
-            dash_stamin_cost: 0.9,
-            slide_stamin_cost: 0.6,
+            dash_stamin_cost: 0.4,
+            slide_stamin_cost: 0.33,
             run_stamin_coeficient_cost: 0.05,
             stamin_coeficient_restore: 0.15,
 
