@@ -1,8 +1,8 @@
 use bevy::prelude::*;
-use bevy::render::render_asset::RenderAssetUsages;
-use bevy::render::texture::{CompressedImageFormats, ImageSampler, ImageType};
-use bevy::sprite::{MaterialMesh2dBundle, Mesh2dHandle};
-use bevy_egui::{egui, EguiContexts, EguiPlugin};
+use bevy::asset::RenderAssetUsages;
+use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+use bevy::sprite::Anchor;
+use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
 use matchbox_socket::WebRtcSocket;
@@ -160,12 +160,12 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "RustBall".to_string(),
-                resolution: (1280.0, 720.0).into(),
+                resolution: (1280u32, 720u32).into(),
                 ..default()
             }),
             ..default()
         }))
-        .add_plugins(EguiPlugin)
+        .add_plugins(EguiPlugin::default())
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
         // Estado de la aplicación
         .init_state::<AppState>()
@@ -185,7 +185,7 @@ fn main() {
         .add_systems(Startup, load_embedded_assets)
         // Sistemas de menú (solo en estado Menu)
         .add_systems(OnEnter(AppState::Menu), setup_menu_camera)
-        .add_systems(Update, menu_ui.run_if(in_state(AppState::Menu)))
+        .add_systems(EguiPrimaryContextPass, menu_ui.run_if(in_state(AppState::Menu)))
         // Sistema de conexión (solo en estado Connecting)
         .add_systems(OnEnter(AppState::Connecting), start_connection)
         .add_systems(
@@ -322,7 +322,7 @@ struct SlideCubeVisual {
 // ============================================================================
 
 fn setup_menu_camera(mut commands: Commands) {
-    commands.spawn((Camera2dBundle::default(), MenuCamera));
+    commands.spawn((Camera2d, MenuCamera));
 }
 
 /// Carga los assets embebidos en memoria al iniciar la aplicación
@@ -330,10 +330,10 @@ fn load_embedded_assets(mut commands: Commands, mut images: ResMut<Assets<Image>
     let ball_image = Image::from_buffer(
         BALL_PNG,
         ImageType::Extension("png"),
-        CompressedImageFormats::default(),
+        CompressedImageFormats::NONE,
         true,
         ImageSampler::default(),
-        RenderAssetUsages::default(),
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
     )
     .expect("Failed to load embedded ball.png");
 
@@ -351,7 +351,8 @@ fn menu_ui(
     mut config: ResMut<ConnectionConfig>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
-    egui::CentralPanel::default().show(contexts.ctx_mut(), |ui| {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    egui::CentralPanel::default().show(ctx, |ui| {
         ui.vertical_centered(|ui| {
             ui.add_space(100.0);
 
@@ -359,7 +360,7 @@ fn menu_ui(
             ui.add_space(40.0);
 
             // Contenedor para los campos
-            egui::Frame::none().inner_margin(20.0).show(ui, |ui| {
+            egui::Frame::new().inner_margin(20.0).show(ui, |ui| {
                 ui.set_width(400.0);
 
                 ui.horizontal(|ui| {
@@ -610,28 +611,23 @@ async fn start_webrtc_client(
 fn setup(mut commands: Commands, config: Res<GameConfig>) {
     // Cámara con zoom ajustado para mejor visualización del mapa
     commands.spawn((
-        Camera2dBundle {
-            projection: bevy::render::camera::OrthographicProjection {
-                scale: 1.3, // Reducido de 2.0 para ver el campo más grande
-                ..default()
-            },
-            transform: Transform::from_xyz(0.0, 0.0, 999.0),
-            ..default()
-        },
+        Camera2d,
+        Projection::Orthographic(OrthographicProjection {
+            scale: 1.3, // Reducido de 2.0 para ver el campo más grande
+            ..OrthographicProjection::default_2d()
+        }),
+        Transform::from_xyz(0.0, 0.0, 999.0),
         MainCamera,
     ));
 
     // El Campo de Juego (Césped) - Color verde de RustBall
     commands.spawn((
-        SpriteBundle {
-            sprite: Sprite {
-                color: Color::srgb(0.2, 0.5, 0.2), // RGB(51, 127, 51) - Verde RustBall
-                custom_size: Some(Vec2::new(config.arena_width, config.arena_height)),
-                ..default()
-            },
-            transform: Transform::from_xyz(0.0, 0.0, -10.0),
+        Sprite {
+            color: Color::srgb(0.2, 0.5, 0.2), // RGB(51, 127, 51) - Verde RustBall
+            custom_size: Some(Vec2::new(config.arena_width, config.arena_height)),
             ..default()
         },
+        Transform::from_xyz(0.0, 0.0, -10.0),
         FieldBackground,
     ));
 
@@ -642,57 +638,45 @@ fn setup(mut commands: Commands, config: Res<GameConfig>) {
 
     // Top
     commands.spawn((
-        SpriteBundle {
-            sprite: Sprite {
-                color: Color::WHITE,
-                custom_size: Some(Vec2::new(w + thickness, thickness)),
-                ..default()
-            },
-            transform: Transform::from_xyz(0.0, h / 2.0, 0.0),
+        Sprite {
+            color: Color::WHITE,
+            custom_size: Some(Vec2::new(w + thickness, thickness)),
             ..default()
         },
+        Transform::from_xyz(0.0, h / 2.0, 0.0),
         DefaultFieldLine,
     ));
 
     // Bottom
     commands.spawn((
-        SpriteBundle {
-            sprite: Sprite {
-                color: Color::WHITE,
-                custom_size: Some(Vec2::new(w + thickness, thickness)),
-                ..default()
-            },
-            transform: Transform::from_xyz(0.0, -h / 2.0, 0.0),
+        Sprite {
+            color: Color::WHITE,
+            custom_size: Some(Vec2::new(w + thickness, thickness)),
             ..default()
         },
+        Transform::from_xyz(0.0, -h / 2.0, 0.0),
         DefaultFieldLine,
     ));
 
     // Left
     commands.spawn((
-        SpriteBundle {
-            sprite: Sprite {
-                color: Color::WHITE,
-                custom_size: Some(Vec2::new(thickness, h + thickness)),
-                ..default()
-            },
-            transform: Transform::from_xyz(-w / 2.0, 0.0, 0.0),
+        Sprite {
+            color: Color::WHITE,
+            custom_size: Some(Vec2::new(thickness, h + thickness)),
             ..default()
         },
+        Transform::from_xyz(-w / 2.0, 0.0, 0.0),
         DefaultFieldLine,
     ));
 
     // Right
     commands.spawn((
-        SpriteBundle {
-            sprite: Sprite {
-                color: Color::WHITE,
-                custom_size: Some(Vec2::new(thickness, h + thickness)),
-                ..default()
-            },
-            transform: Transform::from_xyz(w / 2.0, 0.0, 0.0),
+        Sprite {
+            color: Color::WHITE,
+            custom_size: Some(Vec2::new(thickness, h + thickness)),
             ..default()
         },
+        Transform::from_xyz(w / 2.0, 0.0, 0.0),
         DefaultFieldLine,
     ));
 
@@ -722,7 +706,7 @@ fn handle_input(
     };
 
     // Detectar doble tap de Space
-    let current_time = time.elapsed_seconds();
+    let current_time = time.elapsed_secs();
     let double_tap_window = 0.3; // 300ms para doble tap
     let mut dash_detected = false;
 
@@ -786,9 +770,9 @@ fn process_network_messages(
         &mut Sprite,
         Or<(With<KickChargeBarCurveLeft>, With<KickChargeBarCurveRight>)>,
     >,
-    player_materials: Query<(&PlayerSprite, &Handle<ColorMaterial>)>,
+    player_materials: Query<(&PlayerSprite, &MeshMaterial2d<ColorMaterial>)>,
     children_query: Query<&Children>,
-    mut text_query: Query<&mut Text>,
+    mut text_color_query: Query<&mut TextColor>,
     mut game_tick: ResMut<GameTick>,
 ) {
     let Some(ref receiver) = channels.receiver else {
@@ -876,10 +860,10 @@ fn process_network_messages(
                         continue;
                     }
 
-                    for &child in children.iter() {
+                    for child in children.iter() {
                         // Actualizar sprite del jugador
                         if let Ok((_, mat_handle)) = player_materials.get(child) {
-                            if let Some(mat) = materials.get_mut(mat_handle) {
+                            if let Some(mat) = materials.get_mut(&mat_handle.0) {
                                 mat.color = player_color;
                             }
                         }
@@ -890,11 +874,9 @@ fn process_network_messages(
 
                             // Actualizar texto hijo de la barra
                             if let Ok(bar_children) = children_query.get(child) {
-                                for &text_entity in bar_children.iter() {
-                                    if let Ok(mut text) = text_query.get_mut(text_entity) {
-                                        for section in text.sections.iter_mut() {
-                                            section.style.color = opposite_color;
-                                        }
+                                for text_entity in bar_children.iter() {
+                                    if let Ok(mut text_color) = text_color_query.get_mut(text_entity) {
+                                        text_color.0 = opposite_color;
                                     }
                                 }
                             }
@@ -906,7 +888,7 @@ fn process_network_messages(
                 // Buscar y eliminar el jugador desconectado
                 for (entity, _, _, rp, _, _) in players_q.iter() {
                     if rp.id == player_id {
-                        commands.entity(entity).despawn_recursive();
+                        commands.entity(entity).despawn();
                         println!("👋 [Bevy] Jugador {} eliminado del juego", player_id);
                         break;
                     }
@@ -934,10 +916,8 @@ fn process_network_messages(
             // Igual que RustBall: usar textura con children
             commands
                 .spawn((
-                    SpatialBundle {
-                        transform: Transform::from_xyz(ball.position.0, ball.position.1, 0.0),
-                        ..default()
-                    },
+                    Transform::from_xyz(ball.position.0, ball.position.1, 0.0),
+                    Visibility::default(),
                     RemoteBall,
                     Collider::ball(config.ball_radius), // Para debug rendering
                     Interpolated {
@@ -948,15 +928,14 @@ fn process_network_messages(
                     },
                 ))
                 .with_children(|parent| {
-                    parent.spawn(SpriteBundle {
-                        texture: embedded_assets.ball_texture.clone(),
-                        sprite: Sprite {
+                    parent.spawn((
+                        Sprite {
+                            image: embedded_assets.ball_texture.clone(),
                             custom_size: Some(Vec2::splat(config.ball_radius * 2.0)),
                             ..default()
                         },
-                        transform: Transform::from_xyz(0.0, 0.0, 1.0),
-                        ..default()
-                    });
+                        Transform::from_xyz(0.0, 0.0, 1.0),
+                    ));
                 });
         }
 
@@ -995,10 +974,8 @@ fn process_network_messages(
                 // Igual que RustBall: usar textura con children
                 commands
                     .spawn((
-                        SpatialBundle {
-                            transform: Transform::from_xyz(ps.position.x, ps.position.y, 0.0),
-                            ..default()
-                        },
+                        Transform::from_xyz(ps.position.x, ps.position.y, 0.0),
+                        Visibility::default(),
                         RemotePlayer {
                             id: ps.id,
                             team_index: ps.team_index,
@@ -1024,25 +1001,17 @@ fn process_network_messages(
 
                         // Círculo de borde (outline) - negro, ligeramente más grande
                         parent.spawn((
-                            MaterialMesh2dBundle {
-                                mesh: Mesh2dHandle(
-                                    meshes.add(Circle::new(radius + outline_thickness)),
-                                ),
-                                material: materials.add(Color::BLACK),
-                                transform: Transform::from_xyz(0.0, 0.0, 0.5),
-                                ..default()
-                            },
+                            Mesh2d(meshes.add(Circle::new(radius + outline_thickness))),
+                            MeshMaterial2d(materials.add(Color::BLACK)),
+                            Transform::from_xyz(0.0, 0.0, 0.5),
                             PlayerOutline,
                         ));
 
                         // Círculo principal (relleno) - color del jugador
                         parent.spawn((
-                            MaterialMesh2dBundle {
-                                mesh: Mesh2dHandle(meshes.add(Circle::new(radius))),
-                                material: materials.add(player_color),
-                                transform: Transform::from_xyz(0.0, 0.0, 1.0),
-                                ..default()
-                            },
+                            Mesh2d(meshes.add(Circle::new(radius))),
+                            MeshMaterial2d(materials.add(player_color)),
+                            Transform::from_xyz(0.0, 0.0, 1.0),
                             PlayerSprite { parent_id: ps.id },
                         ));
 
@@ -1056,8 +1025,8 @@ fn process_network_messages(
                         // Mesh personalizado: cuadrado con 4 vértices (LineStrip)
                         let half = indicator_size / 2.0;
                         let mut square_mesh = Mesh::new(
-                            bevy::render::mesh::PrimitiveTopology::LineStrip,
-                            bevy::render::render_asset::RenderAssetUsages::default(),
+                            bevy::mesh::PrimitiveTopology::LineStrip,
+                            RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
                         );
                         square_mesh.insert_attribute(
                             Mesh::ATTRIBUTE_POSITION,
@@ -1071,33 +1040,26 @@ fn process_network_messages(
                         );
 
                         parent.spawn((
-                            MaterialMesh2dBundle {
-                                mesh: Mesh2dHandle(meshes.add(square_mesh)),
-                                material: materials.add(Color::WHITE),
-                                transform: Transform::from_xyz(indicator_x, indicator_y, 1.5)
-                                    .with_rotation(Quat::from_rotation_z(
-                                        std::f32::consts::FRAC_PI_4,
-                                    ))
-                                    .with_scale(Vec3::splat(cube_scale)),
-                                ..default()
-                            },
+                            Mesh2d(meshes.add(square_mesh)),
+                            MeshMaterial2d(materials.add(Color::WHITE)),
+                            Transform::from_xyz(indicator_x, indicator_y, 1.5)
+                                .with_rotation(Quat::from_rotation_z(
+                                    std::f32::consts::FRAC_PI_4,
+                                ))
+                                .with_scale(Vec3::splat(cube_scale)),
                             SlideCubeVisual { parent_id: ps.id },
                         ));
 
                         // Barra de carga de patada
                         parent.spawn((
                             KickChargeBar,
-                            SpriteBundle {
-                                sprite: Sprite {
-                                    color: Color::srgb(1.0, 0.0, 0.0),
-                                    custom_size: Some(Vec2::new(0.0, 5.0)),
-                                    anchor: bevy::sprite::Anchor::CenterLeft,
-                                    ..default()
-                                },
-                                //transform: Transform::from_xyz(-25.0, 60.0, 30.0),
-                                transform: Transform::from_xyz(0.0, 0.0, 30.0),
+                            Sprite {
+                                color: Color::srgb(1.0, 0.0, 0.0),
+                                custom_size: Some(Vec2::new(0.0, 5.0)),
                                 ..default()
                             },
+                            Anchor::CENTER_LEFT,
+                            Transform::from_xyz(0.0, 0.0, 30.0),
                         ));
 
                         let angle = 25.0f32.to_radians();
@@ -1106,78 +1068,60 @@ fn process_network_messages(
                         parent
                             .spawn((
                                 KickChargeBarCurveLeft,
-                                SpriteBundle {
-                                    sprite: Sprite {
-                                        color: opposite_color,
-                                        custom_size: Some(Vec2::new(5.0, 5.0)),
-                                        anchor: bevy::sprite::Anchor::CenterLeft,
-                                        ..default()
-                                    },
-                                    transform: Transform {
-                                        translation: Vec3::new(0.0, -10.0, 30.0),
-                                        // Rotación hacia la izquierda (positiva en el eje Z)
-                                        rotation: Quat::from_rotation_z(-angle),
-                                        ..default()
-                                    },
+                                Sprite {
+                                    color: opposite_color,
+                                    custom_size: Some(Vec2::new(5.0, 5.0)),
+                                    ..default()
+                                },
+                                Anchor::CENTER_LEFT,
+                                Transform {
+                                    translation: Vec3::new(0.0, -10.0, 30.0),
+                                    // Rotación hacia la izquierda (positiva en el eje Z)
+                                    rotation: Quat::from_rotation_z(-angle),
                                     ..default()
                                 },
                             ))
                             .with_children(|bar| {
-                                bar.spawn(Text2dBundle {
-                                    text: Text::from_section(
-                                        "D",
-                                        TextStyle {
-                                            font_size: 20.0,
-                                            color: opposite_color,
-                                            ..default()
-                                        },
-                                    ),
-                                    transform: Transform::from_xyz(
+                                bar.spawn((
+                                    Text2d::new("D"),
+                                    TextFont { font_size: 20.0, ..default() },
+                                    TextColor(opposite_color),
+                                    Transform::from_xyz(
                                         config.ball_radius * 2.0,
                                         -12.0,
                                         10.0,
                                     ),
-                                    ..default()
-                                });
+                                ));
                             });
 
                         // Barra de carga de patada a la derecha
                         parent
                             .spawn((
                                 KickChargeBarCurveRight,
-                                SpriteBundle {
-                                    sprite: Sprite {
-                                        color: opposite_color,
-                                        custom_size: Some(Vec2::new(5.0, 5.0)),
-                                        anchor: bevy::sprite::Anchor::CenterLeft,
-                                        ..default()
-                                    },
-                                    transform: Transform {
-                                        translation: Vec3::new(0.0, 10.0, 30.0),
-                                        // Rotación hacia la derecha (negativa en el eje Z)
-                                        rotation: Quat::from_rotation_z(angle),
-                                        ..default()
-                                    },
+                                Sprite {
+                                    color: opposite_color,
+                                    custom_size: Some(Vec2::new(5.0, 5.0)),
+                                    ..default()
+                                },
+                                Anchor::CENTER_LEFT,
+                                Transform {
+                                    translation: Vec3::new(0.0, 10.0, 30.0),
+                                    // Rotación hacia la derecha (negativa en el eje Z)
+                                    rotation: Quat::from_rotation_z(angle),
                                     ..default()
                                 },
                             ))
                             .with_children(|bar| {
-                                bar.spawn(Text2dBundle {
-                                    text: Text::from_section(
-                                        "A",
-                                        TextStyle {
-                                            font_size: 20.0,
-                                            color: opposite_color,
-                                            ..default()
-                                        },
-                                    ),
-                                    transform: Transform::from_xyz(
+                                bar.spawn((
+                                    Text2d::new("A"),
+                                    TextFont { font_size: 20.0, ..default() },
+                                    TextColor(opposite_color),
+                                    Transform::from_xyz(
                                         config.ball_radius * 2.0,
                                         12.0,
                                         10.0,
                                     ),
-                                    ..default()
-                                });
+                                ));
                             });
 
                         let angle2 = 90.0f32.to_radians();
@@ -1185,19 +1129,16 @@ fn process_network_messages(
                         // Barra de temporizadora de regate
                         parent.spawn((
                             DashCooldown,
-                            SpriteBundle {
-                                sprite: Sprite {
-                                    color: Color::srgb(1.0, 0.0, 0.0),
-                                    custom_size: Some(Vec2::new(0.0, 5.0)),
-                                    anchor: bevy::sprite::Anchor::CenterLeft,
-                                    ..default()
-                                },
-                                transform: Transform {
-                                    translation: Vec3::new(-10.0, -15.0, 30.0),
-                                    // Rotación hacia la derecha (negativa en el eje Z)
-                                    rotation: Quat::from_rotation_z(angle2),
-                                    ..default()
-                                },
+                            Sprite {
+                                color: Color::srgb(1.0, 0.0, 0.0),
+                                custom_size: Some(Vec2::new(0.0, 5.0)),
+                                ..default()
+                            },
+                            Anchor::CENTER_LEFT,
+                            Transform {
+                                translation: Vec3::new(-10.0, -15.0, 30.0),
+                                // Rotación hacia la derecha (negativa en el eje Z)
+                                rotation: Quat::from_rotation_z(angle2),
                                 ..default()
                             },
                         ));
@@ -1205,22 +1146,14 @@ fn process_network_messages(
                         // Nombre del jugador debajo del sprite
                         parent.spawn((
                             PlayerNameText,
-                            Text2dBundle {
-                                text: Text::from_section(
-                                    ps.name.clone(),
-                                    TextStyle {
-                                        font_size: 20.0,
-                                        color: Color::WHITE,
-                                        ..default()
-                                    },
-                                ),
-                                transform: Transform::from_xyz(
-                                    -config.sphere_radius * 1.5,
-                                    0.0,
-                                    10.0,
-                                ),
-                                ..default()
-                            },
+                            Text2d::new(ps.name.clone()),
+                            TextFont { font_size: 20.0, ..default() },
+                            TextColor(Color::WHITE),
+                            Transform::from_xyz(
+                                -config.sphere_radius * 1.5,
+                                0.0,
+                                10.0,
+                            ),
                         ));
                     });
             }
@@ -1230,11 +1163,11 @@ fn process_network_messages(
 
 // Sistema para mantener el nombre del jugador siempre horizontal (sin rotar)
 fn keep_name_horizontal(
-    mut name_query: Query<(&mut Transform, &Parent), With<PlayerNameText>>,
+    mut name_query: Query<(&mut Transform, &ChildOf), With<PlayerNameText>>,
     parent_query: Query<&Transform, (With<RemotePlayer>, Without<PlayerNameText>)>,
 ) {
-    for (mut name_transform, parent) in name_query.iter_mut() {
-        if let Ok(parent_transform) = parent_query.get(parent.get()) {
+    for (mut name_transform, child_of) in name_query.iter_mut() {
+        if let Ok(parent_transform) = parent_query.get(child_of.parent()) {
             // Contrarrestar la rotación del padre para que el texto quede horizontal
             name_transform.rotation = parent_transform.rotation.inverse();
         }
@@ -1243,7 +1176,7 @@ fn keep_name_horizontal(
 
 // 3. Sistema de interpolación (Actualizado)
 fn interpolate_entities(time: Res<Time>, mut q: Query<(&mut Transform, &Interpolated)>) {
-    let dt = time.delta_seconds();
+    let dt = time.delta_secs();
     for (mut transform, interp) in q.iter_mut() {
         // Interpolar posición
         let prediction_offset = interp.target_velocity * dt;
@@ -1279,7 +1212,7 @@ fn camera_follow_player(
     if let Some(my_id) = my_player_id.0 {
         for (player, player_transform) in players.iter() {
             if player.id == my_id {
-                if let Ok(mut cam_transform) = camera.get_single_mut() {
+                if let Ok(mut cam_transform) = camera.single_mut() {
                     cam_transform.translation.x = player_transform.translation.x;
                     cam_transform.translation.y = player_transform.translation.y;
                 }
@@ -1292,9 +1225,15 @@ fn camera_follow_player(
 // Sistema de control de zoom con teclas numéricas
 fn camera_zoom_control(
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut camera: Query<&mut bevy::render::camera::OrthographicProjection, With<MainCamera>>,
+    mut camera: Query<&mut Projection, With<MainCamera>>,
 ) {
-    if let Ok(mut projection) = camera.get_single_mut() {
+    let Ok(mut projection_comp) = camera.single_mut() else {
+        return;
+    };
+    let Projection::Orthographic(ref mut projection) = projection_comp.as_mut() else {
+        return;
+    };
+    {
         let mut new_scale = None;
 
         // Teclas 1-9 para diferentes niveles de zoom
@@ -1338,7 +1277,7 @@ fn update_charge_bar(
     let max_width = 45.0;
 
     for (player, children) in player_query.iter() {
-        for &child in children.iter() {
+        for child in children.iter() {
             // Intentamos obtener el sprite del hijo
             if let Ok(mut sprite) = sprite_query.get_mut(child) {
                 // 1. Caso: Barra Principal
@@ -1385,7 +1324,7 @@ fn update_dash_cooldown(
     let max_width = 30.0;
 
     for (player, children) in player_query.iter() {
-        for &child in children.iter() {
+        for child in children.iter() {
             // Intentamos obtener el sprite del hijo
             if let Ok(mut sprite) = sprite_query.get_mut(child) {
                 // 1. Caso: Barra Principal
@@ -1402,7 +1341,7 @@ fn update_dash_cooldown(
 
 fn update_player_sprite(
     player_query: Query<&RemotePlayer>,
-    sprite_query: Query<(&PlayerSprite, &Handle<ColorMaterial>)>,
+    sprite_query: Query<(&PlayerSprite, &MeshMaterial2d<ColorMaterial>)>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     for (player_sprite, material_handle) in sprite_query.iter() {
@@ -1414,7 +1353,7 @@ fn update_player_sprite(
             // Aplicar color y transparencia al material
             let alpha = if player.not_interacting { 0.3 } else { 1.0 };
 
-            if let Some(material) = materials.get_mut(material_handle) {
+            if let Some(material) = materials.get_mut(&material_handle.0) {
                 material.color = player.base_color.with_alpha(alpha);
             }
         }
@@ -1461,7 +1400,7 @@ fn process_movements(
         };
 
         // Buscar el cubo hijo de este jugador
-        for &child in children.iter() {
+        for child in children.iter() {
             if let Ok((cube_visual, mut cube_transform)) = cube_query.get_mut(child) {
                 if cube_visual.parent_id != player.id {
                     continue;
@@ -1515,7 +1454,7 @@ fn adjust_field_for_map(
             let height = map.height.or(map.bg.height);
 
             if let (Some(w), Some(h)) = (width, height) {
-                if let Ok((mut sprite, _transform)) = field_bg.get_single_mut() {
+                if let Ok((mut sprite, _transform)) = field_bg.single_mut() {
                     sprite.custom_size = Some(Vec2::new(w, h));
                     println!("🎨 Campo ajustado a dimensiones del mapa: {}x{}", w, h);
                 }
@@ -1546,8 +1485,8 @@ fn render_map(mut gizmos: Gizmos, loaded_map: Res<LoadedMap>) {
 
     // Dibujar vértices (puntos de interacción)
     for (_i, vertex) in map.vertexes.iter().enumerate() {
-        let pos = Vec3::new(vertex.x, vertex.y, 6.0); // z=6 para que esté encima
-        gizmos.circle(pos, Dir3::Z, 3.0, vertex_color); // Radio pequeño 3.0
+        let pos = Vec2::new(vertex.x, vertex.y);
+        gizmos.circle_2d(pos, 3.0, vertex_color); // Radio pequeño 3.0
     }
 
     // Dibujar segmentos (paredes)
@@ -1564,8 +1503,8 @@ fn render_map(mut gizmos: Gizmos, loaded_map: Res<LoadedMap>) {
         let v0 = &map.vertexes[segment.v0];
         let v1 = &map.vertexes[segment.v1];
 
-        let p0 = Vec3::new(v0.x, v0.y, 5.0); // z=5 para que esté encima del campo
-        let p1 = Vec3::new(v1.x, v1.y, 5.0);
+        let p0 = Vec2::new(v0.x, v0.y);
+        let p1 = Vec2::new(v1.x, v1.y);
 
         // Determinar color según cMask (tipo de colisión)
         let line_color = if let Some(cmask) = &segment.c_mask {
@@ -1589,7 +1528,7 @@ fn render_map(mut gizmos: Gizmos, loaded_map: Res<LoadedMap>) {
 
         if curve_factor.abs() < 0.01 {
             // Segmento recto
-            gizmos.line(p0, p1, line_color);
+            gizmos.line_2d(p0, p1, line_color);
         } else {
             // Segmento curvo - aproximar con más líneas para mejor visualización
             let num_segments = 24; // Más segmentos para curvas más suaves
@@ -1602,19 +1541,15 @@ fn render_map(mut gizmos: Gizmos, loaded_map: Res<LoadedMap>) {
 
             // Dibujar líneas conectadas
             for i in 0..points.len() - 1 {
-                gizmos.line(
-                    Vec3::new(points[i].x, points[i].y, 5.0),
-                    Vec3::new(points[i + 1].x, points[i + 1].y, 5.0),
-                    line_color,
-                );
+                gizmos.line_2d(points[i], points[i + 1], line_color);
             }
         }
     }
 
     // Dibujar discos (obstáculos circulares)
     for disc in &map.discs {
-        let pos = Vec3::new(disc.pos[0], disc.pos[1], 5.0);
-        gizmos.circle(pos, Dir3::Z, disc.radius, disc_color);
+        let pos = Vec2::new(disc.pos[0], disc.pos[1]);
+        gizmos.circle_2d(pos, disc.radius, disc_color);
     }
 }
 

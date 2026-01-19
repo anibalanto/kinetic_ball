@@ -263,7 +263,7 @@ impl Default for GameConfig {
             player_speed: 385.0,
             walk_coeficient: 0.70,
             run_coeficient: 1.0,
-            kick_force: 800.0,
+            kick_force: 1000.0,
             attract_force: 800.0,
             magnus_coefficient: 33.0,
 
@@ -273,13 +273,13 @@ impl Default for GameConfig {
 
             // Propiedades de materiales
             ball_friction: 0.7,
-            ball_restitution: 0.6,  // Más rebote (arcade)
-            ball_mass: 0.1,         // Más liviana (arcade)
+            ball_restitution: 0.6, // Más rebote (arcade)
+            ball_mass: 0.1,        // Más liviana (arcade)
             sphere_friction: 0.8,
             sphere_restitution: 0.4,
 
             // Propiedades de damping
-            ball_linear_damping: 0.6, // Menos frenado (arcade)
+            ball_linear_damping: 1.5, // Rozamiento moderado
             ball_angular_damping: 0.5,
             sphere_linear_damping: 8.0,
             sphere_angular_damping: 5.0,

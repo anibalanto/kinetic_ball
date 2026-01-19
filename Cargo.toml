@@ -13,11 +13,11 @@ license = "MIT"
 
 [workspace.dependencies]
 # Bevy
-bevy = { version = "0.14"}
-bevy_rapier2d = "0.27"
+bevy = { version = "0.17" }
+bevy_rapier2d = "0.32"
 
 # Networking - Matchbox (WebRTC para juegos Bevy)
-matchbox_socket = "0.10"   # Cliente WebRTC para Bevy
+matchbox_socket = "0.13"   # Cliente WebRTC para Bevy
 tokio = { version = "1.40", features = ["full"] }  # Requerido por matchbox
 # matchbox_server debe instalarse globalmente: cargo install matchbox_server
 serde = { version = "1.0", features = ["derive"] }

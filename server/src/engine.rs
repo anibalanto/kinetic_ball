@@ -26,7 +26,8 @@ pub fn spawn_physics(
     let sphere_entity = commands
         .spawn((
             Sphere,
-            TransformBundle::from_transform(Transform::from_xyz(spawn_x, spawn_y, 0.0)),
+            Transform::from_xyz(spawn_x, spawn_y, 0.0),
+            GlobalTransform::default(),
             RigidBody::Dynamic,
             Collider::ball(config.sphere_radius),
             Velocity::zero(),
@@ -57,11 +58,10 @@ pub fn spawn_physics(
     let slide_cube_entity = commands
         .spawn((
             SlideCube { owner_id: id },
-            TransformBundle::from_transform(
-                Transform::from_xyz(spawn_x + cube_offset.x, spawn_y + cube_offset.y, 0.0)
-                    .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4))
-                    .with_scale(Vec3::splat(1.0)),
-            ),
+            Transform::from_xyz(spawn_x + cube_offset.x, spawn_y + cube_offset.y, 0.0)
+                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4))
+                .with_scale(Vec3::splat(1.0)),
+            GlobalTransform::default(),
         ))
         .id();
 
@@ -128,7 +128,7 @@ pub fn move_players(
             }
 
             if movement.length() > 0.0 {
-                let run_tamin_cost = time.delta_seconds() * config.run_stamin_coeficient_cost;
+                let run_tamin_cost = time.delta_secs() * config.run_stamin_coeficient_cost;
                 let move_coeficient = if game_input.is_pressed(player_id, GameAction::Sprint)
                     && player.stamin > run_tamin_cost
                 {
@@ -208,7 +208,7 @@ pub fn charge_kick(
                     }
 
                     if any_kick_button && player.kick_charging {
-                        player.kick_charge += 2.0 * time.delta_seconds();
+                        player.kick_charge += 2.0 * time.delta_secs();
                         if player.kick_charge > 1.0 {
                             player.kick_charge = 1.0;
                         }
@@ -313,7 +313,7 @@ pub fn look_at_ball(
     mut sphere_query: Query<&mut Transform, With<Sphere>>,
     ball_query: Query<&Transform, (With<Ball>, Without<Sphere>)>,
 ) {
-    if let Ok(ball_transform) = ball_query.get_single() {
+    if let Ok(ball_transform) = ball_query.single() {
         for player in player_query.iter() {
             // Durante slide, NO mirar la pelota - mantener rotación del deslizamiento
             if player.is_sliding {
@@ -573,7 +573,7 @@ pub fn execute_slide(
                 }
             }
 
-            player.slide_timer -= time.delta_seconds();
+            player.slide_timer -= time.delta_secs();
 
             if player.slide_timer <= 0.0 {
                 player.is_sliding = false;
@@ -679,20 +679,28 @@ pub fn dash_first_touch_ball(
     }
 }
 
-pub fn update_ball_damping(
-    config: Res<GameConfig>,
-    mut ball_query: Query<(&mut Damping, &Velocity), With<Ball>>,
-) {
-    for (mut damping, velocity) in ball_query.iter_mut() {
-        let speed = velocity.linvel.length();
-
-        if speed < 50.0 {
-            damping.linear_damping = config.ball_linear_damping * 3.0;
-        } else {
-            damping.linear_damping = config.ball_linear_damping;
-        }
-    }
-}
+// pub fn update_ball_damping(
+//     config: Res<GameConfig>,
+//     mut ball_query: Query<(&mut Damping, &Velocity), With<Ball>>,
+// ) {
+//     for (mut damping, velocity) in ball_query.iter_mut() {
+//         let speed = velocity.linvel.length();
+//
+//         // Damping progresivo: más roce cuando va lenta, menos cuando va rápida
+//         // Esto permite empujarla fácil pero que se detenga cuando está libre
+//         let multiplier = if speed < 30.0 {
+//             5.0  // Muy lenta: frena mucho para que se detenga
+//         } else if speed < 80.0 {
+//             3.0  // Lenta: frena bastante
+//         } else if speed < 150.0 {
+//             1.5  // Media: frena moderado
+//         } else {
+//             1.0  // Rápida: damping base (fácil de empujar/patear)
+//         };
+//
+//         damping.linear_damping = config.ball_linear_damping * multiplier;
+//     }
+// }
 
 pub fn recover_stamin(
     config: Res<GameConfig>,
@@ -707,7 +715,7 @@ pub fn recover_stamin(
             } else if player.stamin < 1.0 {
                 let speed = velocity.linvel.length();
                 if speed <= config.player_speed * config.walk_coeficient {
-                    player.stamin += time.delta_seconds() * config.run_stamin_coeficient_cost * 2.0;
+                    player.stamin += time.delta_secs() * config.run_stamin_coeficient_cost * 2.0;
                 }
             }
         }

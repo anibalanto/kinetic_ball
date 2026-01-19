@@ -240,8 +240,8 @@ pub fn process_network_messages(
                         }
 
                         // Despawnear tanto Player como Sphere con todos sus hijos
-                        commands.entity(player.sphere).despawn_recursive();
-                        commands.entity(entity).despawn_recursive();
+                        commands.entity(player.sphere).despawn();
+                        commands.entity(entity).despawn();
                         // Remover del GameInputManager
                         game_input.remove_player(player.id);
                         println!("❌ Jugador {} ({}) desconectado y removido", player.name, player.id);
@@ -329,7 +329,7 @@ pub fn broadcast_game_state(
         );
     }
 
-    let ball_state = if let Ok((transform, velocity, ball)) = ball.get_single() {
+    let ball_state = if let Ok((transform, velocity, ball)) = ball.single() {
         BallState {
             position: (transform.translation.x, transform.translation.y),
             velocity: (velocity.linvel.x, velocity.linvel.y),

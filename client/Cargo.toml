@@ -13,7 +13,7 @@ shared = { path = "../shared", features = ["bevy"] }
 # Bevy (con rendering completo)
 bevy = { workspace = true }
 bevy_rapier2d = { workspace = true, features = ["debug-render-2d"] }
-bevy_egui = "0.28"
+bevy_egui = "0.38"
 
 # Networking - Matchbox WebRTC
 matchbox_socket = { workspace = true }

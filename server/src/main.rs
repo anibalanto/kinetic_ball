@@ -137,17 +137,6 @@ fn main() {
             )),
         )
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
-        .insert_resource(RapierConfiguration {
-            gravity: Vec2::ZERO,
-            physics_pipeline_active: true,
-            query_pipeline_active: true,
-            timestep_mode: TimestepMode::Fixed {
-                dt: 1.0 / 60.0,
-                substeps: 2,
-            },
-            force_update_from_transform_changes: false,
-            scaled_shape_subdivision: 10,
-        })
         .insert_resource(game_config)
         .insert_resource(NetworkReceiver(Arc::new(Mutex::new(network_rx))))
         .insert_resource(NetworkSender(outgoing_tx))
@@ -158,7 +147,7 @@ fn main() {
             TimerMode::Repeating,
         ))) // 60 Hz
         .init_resource::<GameInputManager>()
-        .add_systems(Startup, setup_game)
+        .add_systems(Startup, (configure_rapier, setup_game).chain())
         .add_systems(
             FixedUpdate,
             (
@@ -174,7 +163,7 @@ fn main() {
                 apply_magnus_effect,
                 attract_ball,
                 dash_first_touch_ball,
-                update_ball_damping,
+                // update_ball_damping,
                 broadcast_game_state,
                 recover_stamin,
             )
@@ -355,6 +344,12 @@ pub enum OutgoingMessage {
 // GAME SETUP
 // ============================================================================
 
+fn configure_rapier(mut rapier_config: Query<&mut RapierConfiguration>) {
+    if let Ok(mut config) = rapier_config.single_mut() {
+        config.gravity = Vec2::ZERO;
+    }
+}
+
 fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
     println!("⚽ Configurando juego...");
 
@@ -363,7 +358,8 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         Ball {
             angular_velocity: 0.0,
         },
-        TransformBundle::from_transform(Transform::from_xyz(0.0, 0.0, 0.0)),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        GlobalTransform::default(),
         RigidBody::Dynamic,
         Collider::ball(config.ball_radius),
         Velocity::zero(),
