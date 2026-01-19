@@ -25,3 +25,7 @@ bytes = { workspace = true }
 # Utilidades
 anyhow = { workspace = true }
 clap = { workspace = true }
+
+# Configuración de keybindings
+ron = "0.8"
+dirs = "5.0"

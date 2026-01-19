@@ -14,6 +14,12 @@ use shared::protocol::{
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
+mod keybindings;
+use keybindings::{
+    key_code_display_name, load_keybindings, save_keybindings, GameAction, KeyBindingsConfig,
+    SettingsUIState,
+};
+
 // ============================================================================
 // ASSETS EMBEBIDOS EN EL BINARIO
 // ============================================================================
@@ -52,6 +58,7 @@ struct Args {
 enum AppState {
     #[default]
     Menu,
+    Settings,
     Connecting,
     InGame,
 }
