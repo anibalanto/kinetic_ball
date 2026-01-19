@@ -41,11 +41,8 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build client
-        run: cargo build -p client --release --target ${{ matrix.target }}
-
-      - name: Build server
-        run: cargo build -p server --release --target ${{ matrix.target }}
+      - name: Build client and server
+        run: cargo build -p client -p server --release --target ${{ matrix.target }}
 
       - name: Upload client artifact
         uses: actions/upload-artifact@v4
