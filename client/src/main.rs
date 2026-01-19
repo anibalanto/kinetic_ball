@@ -1,11 +1,12 @@
-use bevy::prelude::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+use bevy::prelude::*;
 use bevy::sprite::Anchor;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
 use matchbox_socket::WebRtcSocket;
+use serde::Serialize;
 use shared::movements::{get_movement, AnimatedProperty};
 use shared::protocol::PlayerMovement;
 use shared::protocol::{
@@ -195,10 +196,16 @@ fn main() {
         .add_systems(Startup, load_embedded_assets)
         // Sistemas de menú (solo en estado Menu)
         .add_systems(OnEnter(AppState::Menu), setup_menu_camera)
-        .add_systems(EguiPrimaryContextPass, menu_ui.run_if(in_state(AppState::Menu)))
+        .add_systems(
+            EguiPrimaryContextPass,
+            menu_ui.run_if(in_state(AppState::Menu)),
+        )
         // Sistemas de configuración (solo en estado Settings)
         .add_systems(OnEnter(AppState::Settings), setup_menu_camera)
-        .add_systems(EguiPrimaryContextPass, settings_ui.run_if(in_state(AppState::Settings)))
+        .add_systems(
+            EguiPrimaryContextPass,
+            settings_ui.run_if(in_state(AppState::Settings)),
+        )
         // Sistema de conexión (solo en estado Connecting)
         .add_systems(OnEnter(AppState::Connecting), start_connection)
         .add_systems(
@@ -489,49 +496,43 @@ fn settings_ui(
             }
 
             // Grid de keybindings
-            egui::Frame::none()
-                .inner_margin(20.0)
-                .show(ui, |ui| {
-                    egui::Grid::new("keybindings_grid")
-                        .num_columns(2)
-                        .spacing([40.0, 8.0])
-                        .show(ui, |ui| {
-                            let pending = ui_state
-                                .pending_bindings
-                                .clone()
-                                .unwrap_or_else(|| keybindings.clone());
+            egui::Frame::none().inner_margin(20.0).show(ui, |ui| {
+                egui::Grid::new("keybindings_grid")
+                    .num_columns(2)
+                    .spacing([40.0, 8.0])
+                    .show(ui, |ui| {
+                        let pending = ui_state
+                            .pending_bindings
+                            .clone()
+                            .unwrap_or_else(|| keybindings.clone());
 
-                            for action in GameAction::all() {
-                                // Nombre de la acción
-                                ui.label(
-                                    egui::RichText::new(action.display_name()).size(18.0),
-                                );
+                        for action in GameAction::all() {
+                            // Nombre de la acción
+                            ui.label(egui::RichText::new(action.display_name()).size(18.0));
 
-                                // Botón con tecla actual
-                                let key = pending.get_key(*action);
-                                let is_rebinding =
-                                    ui_state.rebinding_action == Some(*action);
+                            // Botón con tecla actual
+                            let key = pending.get_key(*action);
+                            let is_rebinding = ui_state.rebinding_action == Some(*action);
 
-                                let button_text = if is_rebinding {
-                                    "Presiona una tecla...".to_string()
-                                } else {
-                                    key_code_display_name(key)
-                                };
+                            let button_text = if is_rebinding {
+                                "Presiona una tecla...".to_string()
+                            } else {
+                                key_code_display_name(key)
+                            };
 
-                                let button = egui::Button::new(
-                                    egui::RichText::new(&button_text).size(16.0),
-                                );
+                            let button =
+                                egui::Button::new(egui::RichText::new(&button_text).size(16.0));
 
-                                if ui.add_sized([150.0, 28.0], button).clicked()
-                                    && !ui_state.is_rebinding()
-                                {
-                                    ui_state.start_rebind(*action);
-                                }
-
-                                ui.end_row();
+                            if ui.add_sized([150.0, 28.0], button).clicked()
+                                && !ui_state.is_rebinding()
+                            {
+                                ui_state.start_rebind(*action);
                             }
-                        });
-                });
+
+                            ui.end_row();
+                        }
+                    });
+            });
 
             ui.add_space(30.0);
 
@@ -547,7 +548,10 @@ fn settings_ui(
                 {
                     println!("[Settings] Botón Guardar clickeado");
                     if let Some(ref pending) = ui_state.pending_bindings {
-                        println!("[Settings] Aplicando keybindings: kick={:?}", pending.kick.0);
+                        println!(
+                            "[Settings] Aplicando keybindings: kick={:?}",
+                            pending.kick.0
+                        );
                         *keybindings = pending.clone();
                         match save_keybindings(&keybindings) {
                             Ok(_) => {
@@ -557,8 +561,7 @@ fn settings_ui(
                             }
                             Err(e) => {
                                 println!("[Settings] Error al guardar: {}", e);
-                                ui_state.status_message =
-                                    Some(format!("Error al guardar: {}", e));
+                                ui_state.status_message = Some(format!("Error al guardar: {}", e));
                             }
                         }
                     } else {
@@ -572,15 +575,12 @@ fn settings_ui(
                 if ui
                     .add_sized(
                         [180.0, 40.0],
-                        egui::Button::new(
-                            egui::RichText::new("Restaurar Defaults").size(18.0),
-                        ),
+                        egui::Button::new(egui::RichText::new("Restaurar Defaults").size(18.0)),
                     )
                     .clicked()
                 {
                     ui_state.pending_bindings = Some(KeyBindingsConfig::default());
-                    ui_state.status_message =
-                        Some("Restaurado a valores por defecto".to_string());
+                    ui_state.status_message = Some("Restaurado a valores por defecto".to_string());
                 }
 
                 ui.add_space(15.0);
@@ -972,6 +972,7 @@ fn process_network_messages(
     children_query: Query<&Children>,
     mut text_color_query: Query<&mut TextColor>,
     mut game_tick: ResMut<GameTick>,
+    keybindings: Res<KeyBindingsConfig>,
 ) {
     let Some(ref receiver) = channels.receiver else {
         return;
@@ -1073,7 +1074,9 @@ fn process_network_messages(
                             // Actualizar texto hijo de la barra
                             if let Ok(bar_children) = children_query.get(child) {
                                 for text_entity in bar_children.iter() {
-                                    if let Ok(mut text_color) = text_color_query.get_mut(text_entity) {
+                                    if let Ok(mut text_color) =
+                                        text_color_query.get_mut(text_entity)
+                                    {
                                         text_color.0 = opposite_color;
                                     }
                                 }
@@ -1140,7 +1143,8 @@ fn process_network_messages(
         // Actualizar Jugadores
         for ps in players {
             let mut found = false;
-            for (_entity, mut interp, mut transform, mut rp, mut collider, _children) in players_q.iter_mut()
+            for (_entity, mut interp, mut transform, mut rp, mut collider, _children) in
+                players_q.iter_mut()
             {
                 if rp.id == ps.id {
                     interp.target_position = ps.position;
@@ -1241,9 +1245,7 @@ fn process_network_messages(
                             Mesh2d(meshes.add(square_mesh)),
                             MeshMaterial2d(materials.add(Color::WHITE)),
                             Transform::from_xyz(indicator_x, indicator_y, 1.5)
-                                .with_rotation(Quat::from_rotation_z(
-                                    std::f32::consts::FRAC_PI_4,
-                                ))
+                                .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4))
                                 .with_scale(Vec3::splat(cube_scale)),
                             SlideCubeVisual { parent_id: ps.id },
                         ));
@@ -1281,14 +1283,13 @@ fn process_network_messages(
                             ))
                             .with_children(|bar| {
                                 bar.spawn((
-                                    Text2d::new("D"),
-                                    TextFont { font_size: 20.0, ..default() },
+                                    Text2d::new(key_code_display_name(keybindings.curve_left.0)),
+                                    TextFont {
+                                        font_size: 20.0,
+                                        ..default()
+                                    },
                                     TextColor(opposite_color),
-                                    Transform::from_xyz(
-                                        config.ball_radius * 2.0,
-                                        -12.0,
-                                        10.0,
-                                    ),
+                                    Transform::from_xyz(config.ball_radius * 2.0, -12.0, 10.0),
                                 ));
                             });
 
@@ -1311,14 +1312,13 @@ fn process_network_messages(
                             ))
                             .with_children(|bar| {
                                 bar.spawn((
-                                    Text2d::new("A"),
-                                    TextFont { font_size: 20.0, ..default() },
+                                    Text2d::new(key_code_display_name(keybindings.curve_right.0)),
+                                    TextFont {
+                                        font_size: 20.0,
+                                        ..default()
+                                    },
                                     TextColor(opposite_color),
-                                    Transform::from_xyz(
-                                        config.ball_radius * 2.0,
-                                        12.0,
-                                        10.0,
-                                    ),
+                                    Transform::from_xyz(config.ball_radius * 2.0, 12.0, 10.0),
                                 ));
                             });
 
@@ -1345,13 +1345,12 @@ fn process_network_messages(
                         parent.spawn((
                             PlayerNameText,
                             Text2d::new(ps.name.clone()),
-                            TextFont { font_size: 20.0, ..default() },
+                            TextFont {
+                                font_size: 20.0,
+                                ..default()
+                            },
                             TextColor(Color::WHITE),
-                            Transform::from_xyz(
-                                -config.sphere_radius * 1.5,
-                                0.0,
-                                10.0,
-                            ),
+                            Transform::from_xyz(-config.sphere_radius * 1.5, 0.0, 10.0),
                         ));
                     });
             }

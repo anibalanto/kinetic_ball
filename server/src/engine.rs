@@ -757,7 +757,7 @@ pub fn recover_stamin(
             } else if player.stamin < 1.0 {
                 let speed = velocity.linvel.length();
                 if speed <= config.player_speed * config.walk_coeficient {
-                    player.stamin += time.delta_secs() * config.run_stamin_coeficient_cost * 2.0;
+                    player.stamin += time.delta_secs() * config.stamin_coeficient_restore;
                 }
             }
         }
