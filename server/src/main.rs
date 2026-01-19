@@ -164,7 +164,6 @@ fn main() {
                 attract_ball,
                 push_ball_on_contact,
                 dash_first_touch_ball,
-                // update_ball_damping,
                 broadcast_game_state,
                 recover_stamin,
             )
@@ -382,6 +381,7 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         },
         ExternalImpulse::default(),
         ExternalForce::default(),
+        Ccd::enabled(),
     ));
 
     // Intentar cargar mapa
