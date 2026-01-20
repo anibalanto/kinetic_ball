@@ -229,6 +229,7 @@ fn main() {
                 update_charge_bar,
                 update_player_sprite,
                 process_movements,
+                update_mode_visuals,
                 update_target_ball_position,
                 update_dash_cooldown,
             )
@@ -285,6 +286,7 @@ struct RemotePlayer {
     ball_target_position: Option<Vec2>,
     stamin_charge: f32,
     active_movement: Option<PlayerMovement>,
+    mode_active: bool,
 }
 
 #[derive(Component)]
@@ -908,7 +910,7 @@ fn handle_input(
         stop_interact: keyboard.pressed(keybindings.stop_interact.0),
         sprint: keyboard.pressed(keybindings.sprint.0) && !modifier,
         dash: modifier && keyboard.pressed(keybindings.sprint.0),
-        slide: modifier && keyboard.pressed(keybindings.kick.0),
+        mode: keyboard.pressed(keybindings.mode.0),
     };
 
     // Enviamos input siempre, no solo cuando cambia (para mantener estado)
@@ -1134,6 +1136,7 @@ fn process_network_messages(
                     rp.ball_target_position = ps.ball_target_position;
                     rp.stamin_charge = ps.stamin_charge;
                     rp.active_movement = ps.active_movement.clone();
+                    rp.mode_active = ps.mode_active;
 
                     found = true;
                     break;
@@ -1165,6 +1168,7 @@ fn process_network_messages(
                             ball_target_position: ps.ball_target_position,
                             stamin_charge: ps.stamin_charge,
                             active_movement: ps.active_movement.clone(),
+                            mode_active: ps.mode_active,
                         },
                         Collider::ball(config.sphere_radius), // Para debug rendering
                         Interpolated {
@@ -1260,7 +1264,7 @@ fn process_network_messages(
                             ))
                             .with_children(|bar| {
                                 bar.spawn((
-                                    Text2d::new(key_code_display_name(keybindings.curve_left.0)),
+                                    Text2d::new("Left"),
                                     TextFont {
                                         font_size: 20.0,
                                         ..default()
@@ -1289,7 +1293,7 @@ fn process_network_messages(
                             ))
                             .with_children(|bar| {
                                 bar.spawn((
-                                    Text2d::new(key_code_display_name(keybindings.curve_right.0)),
+                                    Text2d::new("Right"),
                                     TextFont {
                                         font_size: 20.0,
                                         ..default()
@@ -1440,7 +1444,6 @@ fn camera_zoom_control(
 
 fn update_charge_bar(
     player_query: Query<(&RemotePlayer, &Children)>,
-    previous_input: Res<PreviousInput>, // Usamos Res si no vas a modificar el input
     // Una sola query mutable para el Sprite evita el conflicto B0001
     mut sprite_query: Query<&mut Sprite>,
     // Queries de solo lectura para identificar qué tipo de barra es cada hijo
@@ -1593,6 +1596,58 @@ fn process_movements(
                 if let Some(rotation) = movement.evaluate(AnimatedProperty::Rotation, progress) {
                     cube_transform.rotation =
                         Quat::from_rotation_z(std::f32::consts::FRAC_PI_4 + rotation);
+                }
+            }
+        }
+    }
+}
+
+// Sistema para actualizar visualización del cubo según modo activo
+fn update_mode_visuals(
+    player_query: Query<(&RemotePlayer, &Children)>,
+    mut cube_query: Query<(&SlideCubeVisual, &mut Transform)>,
+    mut sphere_query: Query<(&PlayerSprite, &mut Transform), Without<SlideCubeVisual>>,
+    config: Res<GameConfig>,
+) {
+    for (player, children) in player_query.iter() {
+        // Buscar el cubo y la esfera hijos de este jugador
+        for child in children.iter() {
+            // Actualizar cubo
+            if let Ok((cube_visual, mut cube_transform)) = cube_query.get_mut(child) {
+                if cube_visual.parent_id != player.id {
+                    continue;
+                }
+
+                // Si hay un movimiento activo, no sobreescribir (el sistema de movimientos tiene prioridad)
+                if player.active_movement.is_some() && player.is_sliding {
+                    continue;
+                }
+
+                if player.mode_active {
+                    // Modo cubo: grande y centrado
+                    cube_transform.scale = Vec3::splat(2.5);
+                    cube_transform.translation.x = 0.0;
+                    cube_transform.translation.y = 0.0;
+                } else {
+                    // Modo normal: pequeño y en offset
+                    cube_transform.scale = Vec3::splat(1.0);
+                    cube_transform.translation.x = config.sphere_radius * 0.7;
+                    cube_transform.translation.y = 0.0;
+                }
+            }
+
+            // Actualizar esfera (escala)
+            if let Ok((sprite, mut sprite_transform)) = sphere_query.get_mut(child) {
+                if sprite.parent_id != player.id {
+                    continue;
+                }
+
+                if player.mode_active {
+                    // Modo cubo: esfera chica
+                    sprite_transform.scale = Vec3::splat(0.3);
+                } else {
+                    // Modo normal: esfera tamaño normal
+                    sprite_transform.scale = Vec3::splat(1.0);
                 }
             }
         }

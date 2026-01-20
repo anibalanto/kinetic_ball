@@ -38,7 +38,7 @@ impl InputSource for NetworkInputSource {
             GameAction::CurveRight => self.current.curve_right,
             GameAction::StopInteract => self.current.stop_interact,
             GameAction::Sprint => self.current.sprint,
-            GameAction::Slide => self.current.slide,
+            GameAction::Mode => self.current.mode,
             GameAction::Dash => self.previous.dash,
         }
     }
@@ -55,7 +55,7 @@ impl InputSource for NetworkInputSource {
             GameAction::CurveRight => self.previous.curve_right,
             GameAction::StopInteract => self.previous.stop_interact,
             GameAction::Sprint => self.previous.sprint,
-            GameAction::Slide => self.previous.slide,
+            GameAction::Mode => self.previous.mode,
             GameAction::Dash => self.previous.dash,
         };
         current && !previous
@@ -73,7 +73,7 @@ impl InputSource for NetworkInputSource {
             GameAction::CurveRight => self.previous.curve_right,
             GameAction::StopInteract => self.previous.stop_interact,
             GameAction::Sprint => self.previous.sprint,
-            GameAction::Slide => self.previous.slide,
+            GameAction::Mode => self.previous.mode,
             GameAction::Dash => self.previous.dash,
         };
         !current && previous

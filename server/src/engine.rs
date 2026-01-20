@@ -3,6 +3,7 @@
 // ============================================================================
 
 use bevy::prelude::*;
+use bevy_rapier2d::parry::query::details::contact_manifolds_composite_shape_composite_shape;
 use bevy_rapier2d::prelude::*;
 use matchbox_socket::PeerId;
 use shared::movements::{get_movement, movement_ids};
@@ -112,6 +113,7 @@ pub fn spawn_physics(
         slide_cube_scale: 1.0,
         active_movement: None,
         team_index,
+        mode_active: false,
     });
 
     println!("✅ Jugador {} spawneado: {}", id, name);
@@ -151,15 +153,20 @@ pub fn move_players(
             }
 
             if movement.length() > 0.0 {
-                let run_tamin_cost = time.delta_secs() * config.run_stamin_coeficient_cost;
-                let move_coeficient = if game_input.is_pressed(player_id, GameAction::Sprint)
-                    && player.stamin > run_tamin_cost
-                {
-                    player.stamin -= run_tamin_cost;
+                let run_stamin_cost = time.delta_secs() * config.run_stamin_coeficient_cost;
+
+                // En modo cubo siempre corre, en modo normal depende de Sprint
+                let should_run = player.mode_active
+                    || (game_input.is_pressed(player_id, GameAction::Sprint)
+                        && player.stamin > run_stamin_cost);
+
+                let move_coeficient = if should_run && player.stamin > run_stamin_cost {
+                    player.stamin -= run_stamin_cost;
                     config.run_coeficient
                 } else {
                     config.walk_coeficient
                 };
+
                 velocity.linvel =
                     movement.normalize_or_zero() * config.player_speed * move_coeficient;
             } else {
@@ -198,13 +205,17 @@ pub fn handle_collision_player(
 // kick_charge.y = dirección de curva (+1.0 derecha, -1.0 izquierda, 0.0 sin curva)
 pub fn charge_kick(
     game_input: Res<GameInputManager>,
-    config: Res<GameConfig>,
     mut players: Query<&mut Player>,
     mut ball_query: Query<(&Transform, &mut ExternalImpulse, &mut Ball)>,
     sphere_query: Query<&Transform, With<Sphere>>,
     time: Res<Time>,
 ) {
     for mut player in players.iter_mut() {
+        // No cargar kick en modo cubo
+        if player.mode_active {
+            continue;
+        }
+
         let player_id = player.id;
 
         // Cualquiera de los 3 botones inicia la carga
@@ -232,9 +243,9 @@ pub fn charge_kick(
                     }
                     // Establecer dirección de curva
                     if curve_right_pressed {
-                        player.kick_charge.y = 1.0;
-                    } else if curve_left_pressed {
                         player.kick_charge.y = -1.0;
+                    } else if curve_left_pressed {
+                        player.kick_charge.y = 1.0;
                     } else {
                         player.kick_charge.y = 0.0;
                     }
@@ -249,6 +260,11 @@ pub fn charge_kick(
 // kick_charge.x = potencia, kick_charge.y = dirección curva (+1 derecha, -1 izquierda)
 pub fn prepare_kick_ball(game_input: Res<GameInputManager>, mut player_query: Query<&mut Player>) {
     for mut player in player_query.iter_mut() {
+        // No preparar kick en modo cubo
+        if player.mode_active {
+            continue;
+        }
+
         let player_id = player.id;
 
         let any_kick_button = game_input.is_pressed(player_id, GameAction::Kick)
@@ -338,6 +354,11 @@ pub fn attract_ball(
     >,
 ) {
     for player in player_query.iter() {
+        // No funciona en modo cubo
+        if player.mode_active {
+            continue;
+        }
+
         let player_id = player.id;
 
         // Con Sprint no hay interacción con la pelota
@@ -415,6 +436,11 @@ pub fn push_ball_on_contact(
     let push_force = 8000.0; // Fuerza de empuje base
 
     for player in player_query.iter() {
+        // No funciona en modo cubo
+        if player.mode_active {
+            continue;
+        }
+
         if player.not_interacting {
             continue;
         }
@@ -461,6 +487,11 @@ pub fn detect_contact_and_kick(
     let contact_radius = config.sphere_radius + config.ball_radius + 5.0;
 
     for mut player in player_query.iter_mut() {
+        // No aplicar kick en modo cubo
+        if player.mode_active {
+            continue;
+        }
+
         // Solo aplicar si hay carga memorizada y no está cargando activamente
         if player.kick_charge.x <= 0.0 || player.kick_charging {
             continue;
@@ -527,6 +558,11 @@ pub fn auto_touch_ball_while_running(
     let default_kick_force = 700.0;
 
     for player in player_query.iter() {
+        // No funciona en modo cubo
+        if player.mode_active {
+            continue;
+        }
+
         // Solo si hay carga memorizada, el kick lo maneja detect_contact_and_kick
         if player.kick_charge.x > 0.0 && !player.kick_charging {
             continue;
@@ -559,7 +595,107 @@ pub fn auto_touch_ball_while_running(
     }
 }
 
-// Sistema de barrida: lee comando de slide del cliente y valida/ejecuta
+fn changing_mode(
+    player: &mut Player,
+    commands: &mut Commands,
+    config: &Res<GameConfig>,
+    sphere_entity: Entity,
+    cube_entity: Entity,
+) {
+    println!(
+        "🔄 Jugador {} modo: {}",
+        player.id,
+        if player.mode_active { "CUBO" } else { "ESFERA" }
+    );
+
+    // Cambiar física según el modo
+
+    if player.mode_active {
+        // Modo CUBO: esfera chica, cubo grande con física
+        commands
+            .entity(sphere_entity)
+            .remove::<Collider>()
+            .insert(Collider::ball(config.sphere_radius * 0.3));
+
+        // Cubo grande con colisiones
+        let cube_size = config.sphere_radius * 1.2;
+        commands.entity(cube_entity).insert((
+            Collider::cuboid(cube_size, cube_size),
+            CollisionGroups::new(Group::GROUP_4, Group::ALL ^ Group::GROUP_5),
+            SolverGroups::new(Group::GROUP_4, Group::ALL ^ Group::GROUP_5),
+            Restitution {
+                coefficient: 0.8,
+                combine_rule: CoefficientCombineRule::Max,
+            },
+        ));
+
+        // Actualizar offset para modo cubo (cubo al centro)
+        player.slide_cube_offset = Vec2::ZERO;
+        player.slide_cube_scale = 2.5;
+        player.slide_cube_active = true;
+    } else {
+        // Modo ESFERA: restaurar tamaños normales
+        commands
+            .entity(sphere_entity)
+            .remove::<Collider>()
+            .insert(Collider::ball(config.sphere_radius));
+
+        // Quitar física del cubo
+        commands
+            .entity(cube_entity)
+            .remove::<Collider>()
+            .remove::<CollisionGroups>()
+            .remove::<SolverGroups>()
+            .remove::<Restitution>();
+
+        // Restaurar offset normal
+        player.slide_cube_offset = Vec2::new(config.sphere_radius * 0.7, 0.0);
+        player.slide_cube_scale = 1.0;
+        player.slide_cube_active = false;
+    }
+}
+
+// Sistema de toggle de modo: Tab activa/desactiva el modo cubo
+pub fn toggle_mode(
+    mut commands: Commands,
+    game_input: Res<GameInputManager>,
+    config: Res<GameConfig>,
+    mut player_query: Query<&mut Player>,
+    mut sphere_query: Query<Entity, With<Sphere>>,
+    mut cube_query: Query<Entity, With<SlideCube>>,
+) {
+    for mut player in player_query.iter_mut() {
+        if game_input.just_pressed(player.id, GameAction::Mode) {
+            player.mode_active = !player.mode_active;
+            if let Ok(sphere_entity) = sphere_query.get_mut(player.sphere) {
+                if let Ok(cube_entity) = cube_query.get_mut(player.slide_cube) {
+                    changing_mode(
+                        &mut player,
+                        &mut commands,
+                        &config,
+                        sphere_entity,
+                        cube_entity,
+                    );
+                }
+            }
+        } else if player.mode_active && player.stamin < 0.0 {
+            player.mode_active = false;
+            if let Ok(sphere_entity) = sphere_query.get_mut(player.sphere) {
+                if let Ok(cube_entity) = cube_query.get_mut(player.slide_cube) {
+                    changing_mode(
+                        &mut player,
+                        &mut commands,
+                        &config,
+                        sphere_entity,
+                        cube_entity,
+                    );
+                }
+            }
+        }
+    }
+}
+
+// Sistema de barrida en modo cubo: Kick adelante, CurveLeft 45° izq, CurveRight 45° der
 pub fn detect_slide(
     game_input: Res<GameInputManager>,
     config: Res<GameConfig>,
@@ -568,33 +704,66 @@ pub fn detect_slide(
     mut sphere_query: Query<(&mut Velocity, &Transform), With<Sphere>>,
 ) {
     for mut player in player_query.iter_mut() {
-        if game_input.just_pressed(player.id, GameAction::Slide) {
-            if config.slide_stamin_cost <= player.stamin && !player.is_sliding {
-                if let Ok((mut velocity, transform)) = sphere_query.get_mut(player.sphere) {
-                    if velocity.linvel.length() > 50.0 {
-                        player.is_sliding = true;
-                        player.slide_timer = 0.3; // Duración total
+        // Solo funciona en modo cubo
+        if !player.mode_active || player.is_sliding {
+            continue;
+        }
 
-                        velocity.linvel *= config.speed_slide_coefficient;
+        // Detectar dirección de barrida
+        let forward = game_input.just_pressed(player.id, GameAction::Kick);
+        let left_45 = game_input.just_pressed(player.id, GameAction::CurveLeft);
+        let right_45 = game_input.just_pressed(player.id, GameAction::CurveRight);
 
-                        // DIRECCIÓN: Usamos la rotación actual (que mira a la pelota gracias a look_at_ball)
-                        let (_, _, angle) = transform.rotation.to_euler(EulerRot::XYZ);
-                        player.slide_direction = Vec2::new(angle.cos(), angle.sin());
+        if !forward && !left_45 && !right_45 {
+            continue;
+        }
 
-                        player.stamin -= config.slide_stamin_cost;
-                        player.slide_cube_active = true;
+        if config.slide_stamin_cost > player.stamin {
+            continue;
+        }
 
-                        // Activar movimiento visual
-                        if let Some(movement) = get_movement(movement_ids::SLIDE_CUBE_GROW) {
-                            let duration_ticks = (movement.duration * TICK_RATE as f32) as u32;
-                            player.active_movement = Some(PlayerMovement {
-                                movement_id: movement_ids::SLIDE_CUBE_GROW,
-                                start_tick: tick.0,
-                                end_tick: tick.0 + duration_ticks,
-                            });
-                        }
-                    }
-                }
+        if let Ok((mut velocity, transform)) = sphere_query.get_mut(player.sphere) {
+            // Dirección base: hacia donde mira el jugador
+            let (_, _, angle) = transform.rotation.to_euler(EulerRot::XYZ);
+            let base_dir = Vec2::new(angle.cos(), angle.sin());
+
+            // Calcular dirección final según la tecla
+            let slide_dir = if forward {
+                base_dir
+            } else if left_45 {
+                // Rotar 45° a la izquierda
+                let angle_45 = std::f32::consts::FRAC_PI_4;
+                Vec2::new(
+                    base_dir.x * angle_45.cos() - base_dir.y * angle_45.sin(),
+                    base_dir.x * angle_45.sin() + base_dir.y * angle_45.cos(),
+                )
+            } else {
+                // Rotar 45° a la derecha
+                let angle_45 = -std::f32::consts::FRAC_PI_4;
+                Vec2::new(
+                    base_dir.x * angle_45.cos() - base_dir.y * angle_45.sin(),
+                    base_dir.x * angle_45.sin() + base_dir.y * angle_45.cos(),
+                )
+            };
+
+            player.is_sliding = true;
+            player.slide_timer = 0.3;
+            player.slide_direction = slide_dir;
+
+            velocity.linvel =
+                slide_dir * velocity.linvel.length().max(100.0) * config.speed_slide_coefficient;
+
+            player.stamin -= config.slide_stamin_cost;
+            player.slide_cube_active = true;
+
+            // Activar movimiento visual
+            if let Some(movement) = get_movement(movement_ids::SLIDE_CUBE_GROW) {
+                let duration_ticks = (movement.duration * TICK_RATE as f32) as u32;
+                player.active_movement = Some(PlayerMovement {
+                    movement_id: movement_ids::SLIDE_CUBE_GROW,
+                    start_tick: tick.0,
+                    end_tick: tick.0 + duration_ticks,
+                });
             }
         }
     }
@@ -729,7 +898,12 @@ pub fn dash_first_touch_ball(
     let activation_radius = config.sphere_radius + config.ball_radius + 50.0;
 
     for mut player in player_query.iter_mut() {
-        if game_input.is_pressed(player.id, GameAction::Dash) {
+        // Solo funciona en modo cubo
+        if !player.mode_active {
+            continue;
+        }
+
+        if game_input.is_pressed(player.id, GameAction::Sprint) {
             if config.dash_stamin_cost <= player.stamin {
                 if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
                     for (ball_transform, mut ball_velocity) in ball_query.iter_mut() {

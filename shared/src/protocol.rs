@@ -105,7 +105,7 @@ pub struct PlayerInput {
     pub stop_interact: bool,
     pub sprint: bool,
     pub dash: bool,
-    pub slide: bool,
+    pub mode: bool,
 }
 
 /// Mensajes que el servidor envía al cliente
@@ -175,6 +175,8 @@ pub struct PlayerState {
     pub active_movement: Option<PlayerMovement>,
     // Team
     pub team_index: u8,
+    // Modo cubo activo
+    pub mode_active: bool,
 }
 
 /// Estado de la pelota
@@ -297,8 +299,8 @@ impl Default for GameConfig {
 
             //Dash time
             stamin: 1.0,
-            dash_stamin_cost: 0.4,
-            slide_stamin_cost: 0.33,
+            dash_stamin_cost: 0.15,
+            slide_stamin_cost: 0.25,
             run_stamin_coeficient_cost: 0.05,
             stamin_coeficient_restore: 0.15,
 

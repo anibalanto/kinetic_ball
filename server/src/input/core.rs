@@ -14,7 +14,7 @@ pub enum GameAction {
     StopInteract, // Equivalente a Space/soltar la pelota
     Sprint,       // Equivalente a Shift
     Dash,
-    Slide, // Barrida (doble tap Sprint detectado en cliente)
+    Mode, // Modo (toggle con un solo tap)
 }
 
 /// Trait que debe implementar cualquier fuente de input

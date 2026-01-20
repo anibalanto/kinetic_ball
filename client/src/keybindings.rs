@@ -191,7 +191,7 @@ pub struct KeyBindingsConfig {
     pub curve_right: SerializableKeyCode,
     pub stop_interact: SerializableKeyCode,
     pub sprint: SerializableKeyCode,
-    pub slide: SerializableKeyCode,
+    pub mode: SerializableKeyCode,
 }
 
 impl Default for KeyBindingsConfig {
@@ -206,7 +206,7 @@ impl Default for KeyBindingsConfig {
             curve_right: SerializableKeyCode(KeyCode::KeyA),
             stop_interact: SerializableKeyCode(KeyCode::ShiftLeft),
             sprint: SerializableKeyCode(KeyCode::Space),
-            slide: SerializableKeyCode(KeyCode::ControlLeft),
+            mode: SerializableKeyCode(KeyCode::ControlLeft),
         }
     }
 }
@@ -226,7 +226,7 @@ pub enum GameAction {
     CurveRight,
     StopInteract,
     Sprint,
-    Slide,
+    Mode,
 }
 
 impl GameAction {
@@ -241,7 +241,7 @@ impl GameAction {
             GameAction::CurveRight,
             GameAction::StopInteract,
             GameAction::Sprint,
-            GameAction::Slide,
+            GameAction::Mode,
         ]
     }
 
@@ -256,7 +256,7 @@ impl GameAction {
             GameAction::CurveRight => "Curva Derecha",
             GameAction::StopInteract => "Frenar",
             GameAction::Sprint => "Sprint",
-            GameAction::Slide => "Barrida",
+            GameAction::Mode => "Modo",
         }
     }
 }
@@ -273,7 +273,7 @@ impl KeyBindingsConfig {
             GameAction::CurveRight => self.curve_right.0,
             GameAction::StopInteract => self.stop_interact.0,
             GameAction::Sprint => self.sprint.0,
-            GameAction::Slide => self.slide.0,
+            GameAction::Mode => self.mode.0,
         }
     }
 
@@ -289,7 +289,7 @@ impl KeyBindingsConfig {
             GameAction::CurveRight => self.curve_right = key,
             GameAction::StopInteract => self.stop_interact = key,
             GameAction::Sprint => self.sprint = key,
-            GameAction::Slide => self.slide = key,
+            GameAction::Mode => self.mode = key,
         }
     }
 }

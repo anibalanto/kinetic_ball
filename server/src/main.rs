@@ -154,6 +154,7 @@ fn main() {
                 update_input_manager,
                 process_network_messages,
                 look_at_ball,
+                toggle_mode,
                 detect_slide,
                 execute_slide,
                 move_players,
@@ -287,6 +288,9 @@ pub struct Player {
 
     // Team
     pub team_index: u8,
+
+    // Mode (cubo grande, esfera chica)
+    pub mode_active: bool,
 }
 
 // Marker component para la entidad física del jugador (igual que RustBall)
