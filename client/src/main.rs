@@ -24,6 +24,7 @@ use keybindings::{
 // ============================================================================
 
 const BALL_PNG: &[u8] = include_bytes!("../assets/ball.png");
+const EMOJI_FONT: &[u8] = include_bytes!("../assets/NotoColorEmoji_WindowsCompatible.ttf");
 
 // ============================================================================
 // RECURSO PARA MOVIMIENTOS ACTIVOS
@@ -254,6 +255,7 @@ fn main() {
 #[derive(Resource, Default)]
 struct EmbeddedAssets {
     ball_texture: Handle<Image>,
+    emoji_font: Handle<Font>,
 }
 
 #[derive(Resource, Default)]
@@ -369,7 +371,11 @@ fn setup_menu_camera(mut commands: Commands) {
 }
 
 /// Carga los assets embebidos en memoria al iniciar la aplicación
-fn load_embedded_assets(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+fn load_embedded_assets(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut fonts: ResMut<Assets<Font>>,
+) {
     let ball_image = Image::from_buffer(
         BALL_PNG,
         ImageType::Extension("png"),
@@ -382,8 +388,14 @@ fn load_embedded_assets(mut commands: Commands, mut images: ResMut<Assets<Image>
 
     let ball_handle = images.add(ball_image);
 
+    // Cargar fuente emoji
+    let emoji_font = Font::try_from_bytes(EMOJI_FONT.to_vec())
+        .expect("Failed to load embedded emoji font");
+    let emoji_font_handle = fonts.add(emoji_font);
+
     commands.insert_resource(EmbeddedAssets {
         ball_texture: ball_handle,
+        emoji_font: emoji_font_handle,
     });
 
     println!("✅ Assets embebidos cargados en memoria");
@@ -1381,7 +1393,7 @@ fn process_network_messages(
                         parent.spawn((
                             KickChargeBar,
                             Sprite {
-                                color: Color::srgb(1.0, 0.0, 0.0),
+                                color: opposite_color,
                                 custom_size: Some(Vec2::new(0.0, 5.0)),
                                 ..default()
                             },
@@ -1407,7 +1419,7 @@ fn process_network_messages(
                                 rotation: Quat::from_rotation_z(angle),
                                 ..default()
                             },
-                            RenderLayers::layer(2),
+                            RenderLayers::from_layers(&[0, 2]),
                         ));
 
                         // Barra de carga de patada a la derecha
@@ -1425,7 +1437,7 @@ fn process_network_messages(
                                 rotation: Quat::from_rotation_z(-angle),
                                 ..default()
                             },
-                            RenderLayers::layer(2),
+                            RenderLayers::from_layers(&[0, 2]),
                         ));
 
                         let angle_90 = 90.0f32.to_radians();
@@ -1434,7 +1446,7 @@ fn process_network_messages(
                         parent.spawn((
                             StaminChargeBar,
                             Sprite {
-                                color: Color::srgb(1.0, 0.0, 0.0),
+                                color: opposite_color,
                                 custom_size: Some(Vec2::new(0.0, 5.0)),
                                 ..default()
                             },
@@ -1465,10 +1477,11 @@ fn process_network_messages(
                             LeftText,
                             Text2d::new("L"),
                             TextFont {
-                                font_size: 40.0,
+                                font: embedded_assets.emoji_font.clone(),
+                                font_size: 30.0,
                                 ..default()
                             },
-                            TextColor(Color::linear_rgba(1.0, 1.0, 1.0, 0.1)),
+
                             Transform {
                                 translation: Vec3::new(0.0, config.ball_radius * 4.0, 10.0),
                                 // Rotación hacia la derecha (negativa en el eje Z)
@@ -1481,10 +1494,10 @@ fn process_network_messages(
                             RightText,
                             Text2d::new("R"),
                             TextFont {
-                                font_size: 40.0,
+                                font: embedded_assets.emoji_font.clone(),
+                                font_size: 30.0,
                                 ..default()
                             },
-                            TextColor(Color::linear_rgba(1.0, 1.0, 1.0, 0.1)),
                             Transform {
                                 translation: Vec3::new(0.0, -config.ball_radius * 4.0, 10.0),
                                 // Rotación hacia la derecha (negativa en el eje Z)
@@ -1700,7 +1713,6 @@ fn update_charge_bar(
                 if bar_main_q.contains(child) {
                     sprite.custom_size =
                         Some(Vec2::new(max_width * player.kick_charge.x + 5.0, 5.0));
-                    sprite.color = Color::srgb(1.0, 1.0 - player.kick_charge.x, 0.0);
                 }
                 // 2. Caso: Curva Izquierda (kick_charge.y < 0)
                 else if bar_left_q.contains(child) {
@@ -1739,9 +1751,6 @@ fn update_dash_cooldown(
                 // 1. Caso: Barra Principal
                 if bar_main_q.contains(child) {
                     sprite.custom_size = Some(Vec2::new(max_width * player.stamin_charge, 5.0));
-
-                    sprite.color =
-                        Color::srgb(1.0, 0.5 * player.stamin_charge, player.stamin_charge);
                 }
             }
         }
