@@ -100,6 +100,9 @@ Para jugar con amigos por internet, necesitas exponer el servidor de señalizaci
 
 ![Controles del teclado](images/keyboard.png)
 
+### Modo esfera
+Modo por defecto que permite controlar la bola y patear
+
 | Acción | Tecla por defecto |
 |--------|-------------------|
 | Mover | Flechas direccionales |
@@ -107,10 +110,22 @@ Para jugar con amigos por internet, necesitas exponer el servidor de señalizaci
 | Curva izquierda | A |
 | Curva derecha | D |
 | Sprint/Correr | Espacio |
-| Barrer (slide) | Ctrl |
 | No tocar pelota | Shift |
-| Cambio de dirección | Espacio x2 + flechas |
-| Modo cubo | Ctrl derecho |
+
+### Modo cubo (Ctrl derecho)
+Permite barrer y hacer regates, siempre corre y no interactua con la pelota sin realizar acción.
+Al dejar de terner estamina vuelve al estado esfera automáticamente.
+
+| Acción | Tecla por defecto |
+|--------|-------------------|
+| Barrer (slide) | S |
+| Barrer derecha | D |
+| Barrer izquierda | A |
+| Cambio de dirección | Espacio + flechas |
+
+### Configuración
+| Acción | Tecla |
+|--------|-------------------|
 | Zoom cámara | Teclas 1-9 |
 
 Las teclas se pueden reconfigurar desde el menú "Teclas" en el cliente.
