@@ -1,4 +1,5 @@
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::{visibility::RenderLayers, ScalingMode};
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
@@ -234,6 +235,12 @@ fn main() {
                 update_mode_visuals,
                 update_target_ball_position,
                 update_dash_cooldown,
+                update_camera_viewports,
+                spawn_minimap_dots,
+                sync_minimap_dots,
+                cleanup_minimap_dots,
+                draw_minimap_frame,
+                update_detail_camera_background,
             )
                 .run_if(in_state(AppState::InGame)),
         )
@@ -268,10 +275,22 @@ struct LoadedMap(Option<shared::map::Map>);
 struct DefaultFieldLine;
 
 #[derive(Component)]
+struct MinimapFieldLine;
+
+#[derive(Component)]
+struct MinimapFrame;
+
+#[derive(Component)]
 struct FieldBackground;
 
 #[derive(Component)]
 struct MenuCamera;
+
+#[derive(Component)]
+struct MinimapCamera;
+
+#[derive(Component)]
+struct PlayerDetailCamera;
 
 // ============================================================================
 // COMPONENTES
@@ -315,7 +334,7 @@ struct KickChargeBarCurveLeft;
 struct KickChargeBarCurveRight;
 
 #[derive(Component)]
-struct DashCooldown;
+struct StaminChargeBar;
 
 #[derive(Component)]
 struct PlayerNameText;
@@ -338,6 +357,14 @@ struct PlayerOutline;
 struct SlideCubeVisual {
     parent_id: u32,
 }
+
+#[derive(Component)]
+struct MinimapDot {
+    tracks_entity: Entity,
+}
+
+#[derive(Component)]
+struct MinimapFieldBackground;
 
 // ============================================================================
 // SISTEMAS DE MENÚ
@@ -807,8 +834,13 @@ async fn start_webrtc_client(
 // GAME SYSTEMS
 // ============================================================================
 
-fn setup(mut commands: Commands, config: Res<GameConfig>) {
-    // Cámara con zoom ajustado para mejor visualización del mapa
+fn setup(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+) {
+    // Cámara principal - Layer 0 (todo excepto minimap dots)
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
@@ -817,9 +849,47 @@ fn setup(mut commands: Commands, config: Res<GameConfig>) {
         }),
         Transform::from_xyz(0.0, 0.0, 999.0),
         MainCamera,
+        RenderLayers::layer(0),
     ));
 
-    // El Campo de Juego (Césped) - Color verde de RustBall
+    // Cámara minimapa - Layer 1 (solo puntos simples)
+    // Usa ScalingMode::Fixed para mostrar todo el campo, con deformación si es necesario
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: 1,
+            ..default()
+        },
+        Projection::Orthographic(OrthographicProjection {
+            scaling_mode: ScalingMode::Fixed {
+                width: config.arena_width,
+                height: config.arena_height,
+            },
+            ..OrthographicProjection::default_2d()
+        }),
+        Transform::from_xyz(0.0, 0.0, 999.0),
+        MinimapCamera,
+        RenderLayers::layer(1),
+    ));
+
+    // --- Cámara Detalle Jugador (Abajo Derecha) - Layer 0 ---
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: 2,
+            clear_color: ClearColorConfig::Custom(Color::srgb(0.2, 0.2, 0.2)), // Se actualiza dinámicamente
+            ..default()
+        },
+        Projection::Orthographic(OrthographicProjection {
+            scale: 1.5, // Zoom alejado para ver jugador más pequeño (3x más lejos)
+            ..OrthographicProjection::default_2d()
+        }),
+        Transform::from_xyz(0.0, 0.0, 999.0),
+        PlayerDetailCamera,
+        RenderLayers::layer(2),
+    ));
+
+    // El Campo de Juego (Césped) - Color verde de RustBall - Layer 0
     commands.spawn((
         Sprite {
             color: Color::srgb(0.2, 0.5, 0.2), // RGB(51, 127, 51) - Verde RustBall
@@ -828,8 +898,94 @@ fn setup(mut commands: Commands, config: Res<GameConfig>) {
         },
         Transform::from_xyz(0.0, 0.0, -10.0),
         FieldBackground,
+        RenderLayers::layer(0),
     ));
 
+    // Fondo del campo para minimapa - Layer 1 (verde más oscuro)
+    commands.spawn((
+        Sprite {
+            color: Color::srgb(0.1, 0.3, 0.1), // Verde más oscuro para minimapa
+            custom_size: Some(Vec2::new(config.arena_width, config.arena_height)),
+            ..default()
+        },
+        Transform::from_xyz(0.0, 0.0, -10.0),
+        MinimapFieldBackground,
+        RenderLayers::layer(1),
+    ));
+
+    // Líneas simplificadas del campo para minimapa - Layer 1
+    let minimap_line_thickness = 8.0;
+    let minimap_line_color = Color::srgba(1.0, 1.0, 1.0, 0.6);
+    let mw = config.arena_width;
+    let mh = config.arena_height;
+
+    // Borde superior - minimapa
+    commands.spawn((
+        Sprite {
+            color: minimap_line_color,
+            custom_size: Some(Vec2::new(
+                mw + minimap_line_thickness,
+                minimap_line_thickness,
+            )),
+            ..default()
+        },
+        Transform::from_xyz(0.0, mh / 2.0, 0.0),
+        MinimapFieldLine,
+        RenderLayers::layer(1),
+    ));
+    // Borde inferior - minimapa
+    commands.spawn((
+        Sprite {
+            color: minimap_line_color,
+            custom_size: Some(Vec2::new(
+                mw + minimap_line_thickness,
+                minimap_line_thickness,
+            )),
+            ..default()
+        },
+        Transform::from_xyz(0.0, -mh / 2.0, 0.0),
+        MinimapFieldLine,
+        RenderLayers::layer(1),
+    ));
+    // Borde izquierdo - minimapa
+    commands.spawn((
+        Sprite {
+            color: minimap_line_color,
+            custom_size: Some(Vec2::new(
+                minimap_line_thickness,
+                mh + minimap_line_thickness,
+            )),
+            ..default()
+        },
+        Transform::from_xyz(-mw / 2.0, 0.0, 0.0),
+        MinimapFieldLine,
+        RenderLayers::layer(1),
+    ));
+    // Borde derecho - minimapa
+    commands.spawn((
+        Sprite {
+            color: minimap_line_color,
+            custom_size: Some(Vec2::new(
+                minimap_line_thickness,
+                mh + minimap_line_thickness,
+            )),
+            ..default()
+        },
+        Transform::from_xyz(mw / 2.0, 0.0, 0.0),
+        MinimapFieldLine,
+        RenderLayers::layer(1),
+    ));
+    // Línea central vertical - minimapa
+    commands.spawn((
+        Sprite {
+            color: minimap_line_color,
+            custom_size: Some(Vec2::new(minimap_line_thickness, mh)),
+            ..default()
+        },
+        Transform::from_xyz(0.0, 0.0, 0.0),
+        MinimapFieldLine,
+        RenderLayers::layer(1),
+    ));
     // Líneas blancas del campo (bordes) - igual que RustBall (z = 0.0)
     let thickness = 5.0;
     let w = config.arena_width;
@@ -844,6 +1000,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>) {
         },
         Transform::from_xyz(0.0, h / 2.0, 0.0),
         DefaultFieldLine,
+        RenderLayers::layer(0),
     ));
 
     // Bottom
@@ -855,6 +1012,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>) {
         },
         Transform::from_xyz(0.0, -h / 2.0, 0.0),
         DefaultFieldLine,
+        RenderLayers::layer(0),
     ));
 
     // Left
@@ -866,6 +1024,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>) {
         },
         Transform::from_xyz(-w / 2.0, 0.0, 0.0),
         DefaultFieldLine,
+        RenderLayers::layer(0),
     ));
 
     // Right
@@ -877,6 +1036,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>) {
         },
         Transform::from_xyz(w / 2.0, 0.0, 0.0),
         DefaultFieldLine,
+        RenderLayers::layer(0),
     ));
 
     // El mensaje Ready ahora se envía automáticamente en el thread de red después de recibir Welcome
@@ -1114,6 +1274,7 @@ fn process_network_messages(
                         target_rotation: 0.0,
                         smoothing: 20.0,
                     },
+                    RenderLayers::layer(0),
                 ))
                 .with_children(|parent| {
                     parent.spawn((
@@ -1123,6 +1284,7 @@ fn process_network_messages(
                             ..default()
                         },
                         Transform::from_xyz(0.0, 0.0, 1.0),
+                        RenderLayers::from_layers(&[0, 2]),
                     ));
                 });
         }
@@ -1185,6 +1347,7 @@ fn process_network_messages(
                             target_rotation: ps.rotation,
                             smoothing: 15.0,
                         },
+                        RenderLayers::from_layers(&[0, 2]),
                     ))
                     .with_children(|parent| {
                         let radius = config.sphere_radius;
@@ -1196,6 +1359,7 @@ fn process_network_messages(
                             MeshMaterial2d(materials.add(Color::BLACK)),
                             Transform::from_xyz(0.0, 0.0, 0.5),
                             PlayerOutline,
+                            RenderLayers::from_layers(&[0, 2]),
                         ));
 
                         // Círculo principal (relleno) - color del jugador
@@ -1204,6 +1368,7 @@ fn process_network_messages(
                             MeshMaterial2d(materials.add(player_color)),
                             Transform::from_xyz(0.0, 0.0, 1.0),
                             PlayerSprite { parent_id: ps.id },
+                            RenderLayers::from_layers(&[0, 2]),
                         ));
 
                         // Indicador de dirección (cubo pequeño hacia adelante)
@@ -1237,6 +1402,7 @@ fn process_network_messages(
                                 .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4))
                                 .with_scale(Vec3::splat(cube_scale)),
                             SlideCubeVisual { parent_id: ps.id },
+                            RenderLayers::from_layers(&[0, 2]),
                         ));
 
                         // Barra de carga de patada
@@ -1249,6 +1415,7 @@ fn process_network_messages(
                             },
                             Anchor::CENTER_LEFT,
                             Transform::from_xyz(0.0, 0.0, 30.0),
+                            RenderLayers::from_layers(&[0, 2]),
                         ));
 
                         let angle = 25.0f32.to_radians();
@@ -1268,6 +1435,7 @@ fn process_network_messages(
                                 rotation: Quat::from_rotation_z(angle),
                                 ..default()
                             },
+                            RenderLayers::layer(2),
                         ));
 
                         // Barra de carga de patada a la derecha
@@ -1285,13 +1453,14 @@ fn process_network_messages(
                                 rotation: Quat::from_rotation_z(-angle),
                                 ..default()
                             },
+                            RenderLayers::layer(2),
                         ));
 
                         let angle_90 = 90.0f32.to_radians();
 
-                        // Barra de temporizadora de regate
+                        // Barra de carga de estamina
                         parent.spawn((
-                            DashCooldown,
+                            StaminChargeBar,
                             Sprite {
                                 color: Color::srgb(1.0, 0.0, 0.0),
                                 custom_size: Some(Vec2::new(0.0, 5.0)),
@@ -1304,6 +1473,7 @@ fn process_network_messages(
                                 rotation: Quat::from_rotation_z(angle_90),
                                 ..default()
                             },
+                            RenderLayers::layer(2),
                         ));
 
                         // Nombre del jugador debajo del sprite
@@ -1316,6 +1486,7 @@ fn process_network_messages(
                             },
                             TextColor(Color::WHITE),
                             Transform::from_xyz(-config.sphere_radius * 1.5, 0.0, 10.0),
+                            RenderLayers::layer(0),
                         ));
 
                         parent.spawn((
@@ -1332,6 +1503,7 @@ fn process_network_messages(
                                 rotation: Quat::from_rotation_z(angle_90),
                                 ..default()
                             },
+                            RenderLayers::layer(2), // Solo visible en cámara de detalle
                         ));
                         parent.spawn((
                             RightText,
@@ -1347,6 +1519,7 @@ fn process_network_messages(
                                 rotation: Quat::from_rotation_z(angle_90),
                                 ..default()
                             },
+                            RenderLayers::layer(2), // Solo visible en cámara de detalle
                         ));
                     });
             }
@@ -1423,18 +1596,39 @@ fn interpolate_entities(time: Res<Time>, mut q: Query<(&mut Transform, &Interpol
 
 fn camera_follow_player(
     my_player_id: Res<MyPlayerId>,
-    players: Query<(&RemotePlayer, &Transform), Without<MainCamera>>,
-    mut camera: Query<&mut Transform, With<MainCamera>>,
+    players: Query<
+        (&RemotePlayer, &Transform),
+        (
+            Without<MainCamera>,
+            Without<MinimapCamera>,
+            Without<PlayerDetailCamera>,
+        ),
+    >,
+    mut cameras: ParamSet<(
+        Query<&mut Transform, With<MainCamera>>,
+        Query<&mut Transform, With<MinimapCamera>>,
+        Query<&mut Transform, With<PlayerDetailCamera>>,
+    )>,
 ) {
-    if let Some(my_id) = my_player_id.0 {
-        for (player, player_transform) in players.iter() {
-            if player.id == my_id {
-                if let Ok(mut cam_transform) = camera.single_mut() {
-                    cam_transform.translation.x = player_transform.translation.x;
-                    cam_transform.translation.y = player_transform.translation.y;
-                }
-                break;
-            }
+    let Some(my_id) = my_player_id.0 else { return };
+
+    // Buscamos la posición de nuestro jugador
+    let player_pos = players
+        .iter()
+        .find(|(p, _)| p.id == my_id)
+        .map(|(_, t)| t.translation);
+
+    if let Some(pos) = player_pos {
+        // 1. Cámara principal sigue al jugador
+        if let Ok(mut cam) = cameras.p0().single_mut() {
+            cam.translation.x = pos.x;
+            cam.translation.y = pos.y;
+        }
+
+        // 3. Detalle del jugador sigue al jugador (siempre centrado en él)
+        if let Ok(mut cam) = cameras.p2().single_mut() {
+            cam.translation.x = pos.x;
+            cam.translation.y = pos.y;
         }
     }
 }
@@ -1478,6 +1672,40 @@ fn camera_zoom_control(
             projection.scale = scale;
             println!("📷 Zoom ajustado a: {:.1}x", scale);
         }
+    }
+}
+
+use bevy::camera::Viewport;
+
+fn update_camera_viewports(
+    windows: Query<&Window>,
+    mut minimap_q: Query<&mut Camera, (With<MinimapCamera>, Without<PlayerDetailCamera>)>,
+    mut detail_q: Query<&mut Camera, (With<PlayerDetailCamera>, Without<MinimapCamera>)>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let width = window.resolution.physical_width();
+    let height = window.resolution.physical_height();
+
+    // Minimapa: 300x180 px, centrado horizontalmente abajo
+    if let Ok(mut cam) = minimap_q.single_mut() {
+        let size = UVec2::new(300, 180);
+        cam.viewport = Some(Viewport {
+            physical_position: UVec2::new((width / 2) - (size.x / 2), height - size.y - 15),
+            physical_size: size,
+            depth: 0.0..1.0,
+        });
+    }
+
+    // Detalle Jugador: 200x200 px, abajo a la derecha
+    if let Ok(mut cam) = detail_q.single_mut() {
+        let size = UVec2::new(200, 200);
+        cam.viewport = Some(Viewport {
+            physical_position: UVec2::new(width - size.x - 15, height - size.y - 15),
+            physical_size: size,
+            depth: 0.0..1.0,
+        });
     }
 }
 
@@ -1528,7 +1756,7 @@ fn update_dash_cooldown(
     // Una sola query mutable para el Sprite evita el conflicto B0001
     mut sprite_query: Query<&mut Sprite>,
     // Queries de solo lectura para identificar qué tipo de barra es cada hijo
-    bar_main_q: Query<Entity, With<DashCooldown>>,
+    bar_main_q: Query<Entity, With<StaminChargeBar>>,
 ) {
     let max_width = 30.0;
 
@@ -1890,4 +2118,173 @@ fn approximate_curve_for_rendering(
     }
 
     points
+}
+
+// ============================================================================
+// SISTEMAS DE MINIMAPA
+// ============================================================================
+
+/// Crea puntos en Layer 1 cuando aparecen jugadores/pelota
+fn spawn_minimap_dots(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    config: Res<GameConfig>,
+    players_without_dots: Query<(Entity, &RemotePlayer), Without<Children>>,
+    ball_without_dots: Query<Entity, (With<RemoteBall>, Without<Children>)>,
+    existing_dots: Query<&MinimapDot>,
+    players_with_dots: Query<(Entity, &RemotePlayer)>,
+    ball_with_dots: Query<Entity, With<RemoteBall>>,
+) {
+    // Crear set de entidades ya trackeadas
+    let tracked_entities: std::collections::HashSet<Entity> =
+        existing_dots.iter().map(|dot| dot.tracks_entity).collect();
+
+    // Spawn dots para jugadores que aún no tienen
+    for (entity, player) in players_with_dots.iter() {
+        if tracked_entities.contains(&entity) {
+            continue;
+        }
+
+        // Color del equipo desde config
+        let team_color = config
+            .team_colors
+            .get(player.team_index as usize)
+            .copied()
+            .unwrap_or((0.5, 0.5, 0.5));
+
+        let dot_color = Color::srgb(team_color.0, team_color.1, team_color.2);
+
+        // Círculo de 80px para jugadores (4x más grande para minimapa)
+        commands.spawn((
+            Mesh2d(meshes.add(Circle::new(80.0))),
+            MeshMaterial2d(materials.add(dot_color)),
+            Transform::from_xyz(0.0, 0.0, 10.0),
+            MinimapDot {
+                tracks_entity: entity,
+            },
+            RenderLayers::layer(1),
+        ));
+    }
+
+    // Spawn dot para pelota si no tiene
+    for entity in ball_with_dots.iter() {
+        if tracked_entities.contains(&entity) {
+            continue;
+        }
+
+        // Círculo de 60px blanco para pelota (4x más grande para minimapa)
+        commands.spawn((
+            Mesh2d(meshes.add(Circle::new(60.0))),
+            MeshMaterial2d(materials.add(Color::WHITE)),
+            Transform::from_xyz(0.0, 0.0, 11.0),
+            MinimapDot {
+                tracks_entity: entity,
+            },
+            RenderLayers::layer(1),
+        ));
+    }
+}
+
+/// Sincroniza posición de puntos con entidades reales
+fn sync_minimap_dots(
+    mut dots: Query<(&MinimapDot, &mut Transform)>,
+    transforms: Query<&Transform, Without<MinimapDot>>,
+) {
+    for (dot, mut dot_transform) in dots.iter_mut() {
+        if let Ok(tracked_transform) = transforms.get(dot.tracks_entity) {
+            dot_transform.translation.x = tracked_transform.translation.x;
+            dot_transform.translation.y = tracked_transform.translation.y;
+        }
+    }
+}
+
+/// Elimina puntos cuando desaparecen entidades
+fn cleanup_minimap_dots(
+    mut commands: Commands,
+    dots: Query<(Entity, &MinimapDot)>,
+    entities: Query<Entity>,
+) {
+    for (dot_entity, dot) in dots.iter() {
+        // Si la entidad trackeada ya no existe, eliminar el dot
+        if entities.get(dot.tracks_entity).is_err() {
+            commands.entity(dot_entity).despawn();
+        }
+    }
+}
+
+/// Dibuja un marco alrededor del minimapa usando egui
+fn draw_minimap_frame(mut contexts: EguiContexts, windows: Query<&Window>) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+
+    // Dimensiones del minimapa (mismas que en update_camera_viewports)
+    let minimap_width = 300.0;
+    let minimap_height = 180.0;
+    let margin = 15.0;
+    let frame_thickness = 3.0;
+
+    // Posición del minimapa (centrado horizontalmente, abajo)
+    let window_width = window.width();
+    let window_height = window.height();
+    let minimap_x = (window_width - minimap_width) / 2.0;
+    let minimap_y = window_height - minimap_height - margin;
+
+    // Dibujar marco usando egui::Area
+    egui::Area::new(egui::Id::new("minimap_frame"))
+        .fixed_pos(egui::pos2(
+            minimap_x - frame_thickness,
+            minimap_y - frame_thickness,
+        ))
+        .order(egui::Order::Background)
+        .show(ctx, |ui| {
+            let frame_size = egui::vec2(
+                minimap_width + frame_thickness * 2.0,
+                minimap_height + frame_thickness * 2.0,
+            );
+
+            // Marco con borde blanco y fondo semitransparente
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180))
+                .stroke(egui::Stroke::new(2.0, egui::Color32::WHITE))
+                .corner_radius(4.0)
+                .show(ui, |ui| {
+                    ui.allocate_space(frame_size);
+                });
+        });
+}
+
+/// Actualiza el fondo de la cámara de detalle al color complementario del equipo del jugador
+fn update_detail_camera_background(
+    my_player_id: Res<MyPlayerId>,
+    config: Res<GameConfig>,
+    players: Query<&RemotePlayer>,
+    mut camera_q: Query<&mut Camera, With<PlayerDetailCamera>>,
+) {
+    let Some(my_id) = my_player_id.0 else { return };
+
+    // Buscar mi jugador para obtener el team_index
+    let Some(my_player) = players.iter().find(|p| p.id == my_id) else {
+        return;
+    };
+
+    // Obtener color del equipo
+    let team_color = config
+        .team_colors
+        .get(my_player.team_index as usize)
+        .copied()
+        .unwrap_or((0.5, 0.5, 0.5));
+
+    // Calcular color complementario
+    let (r, g, b) = complementary_color(team_color.0, team_color.1, team_color.2);
+
+    // Actualizar clear_color de la cámara
+    if let Ok(mut cam) = camera_q.single_mut() {
+        cam.clear_color = ClearColorConfig::Custom(Color::srgb(r, g, b));
+    }
 }
