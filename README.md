@@ -4,190 +4,190 @@
 
 # kinetic_ball
 
-Inspirado en ver como usuando solo una X en HaxBall podían hacer tanto, escrito en Rust usando [Bevy](https://bevyengine.org/) para el motor de juego y [Matchbox](https://github.com/johanhelsing/matchbox) para networking WebRTC peer-to-peer.
+Inspired by seeing how much could be done with just an X in HaxBall, written in Rust using [Bevy](https://bevyengine.org/) as the game engine and [Matchbox](https://github.com/johanhelsing/matchbox) for WebRTC peer-to-peer networking.
 
-## Características
+## Features
 
-- Servidor autoritativo con física en Rapier2D
-- Cliente gráfico con Bevy 0.17
-- Networking WebRTC peer-to-peer via matchbox_socket
-- Soporte para mapas personalizados (formato HaxBall `.hbs`, `.json`, `.json5`)
-- Teclas configurables (se guardan en `~/.config/rustball/keybindings.ron`)
-- Minimapa y cámara de detalle del jugador
-- Sistema de patadas con efecto/curva
-- Sprint, barrida (slide) y modo cubo
+- Authoritative server with Rapier2D physics
+- Graphical client with Bevy 0.17
+- WebRTC peer-to-peer networking via matchbox_socket
+- Custom map support (HaxBall format `.hbs`, `.json`, `.json5`)
+- Configurable keybindings (saved in `~/.config/rustball/keybindings.ron`)
+- Minimap and player detail camera
+- Kick system with curve/spin effect
+- Sprint, slide and cube mode
 
-## Requisitos
+## Requirements
 
 - Rust 1.75+
-- `matchbox_server` para señalización WebRTC
+- `matchbox_server` for WebRTC signaling
 
 ```bash
 cargo install matchbox_server
 ```
 
-## Compilación
+## Building
 
 ```bash
-# Compilar todo (server + client + shared)
+# Build everything (server + client + shared)
 cargo build --release
 
-# O compilar por separado
+# Or build separately
 cargo build --release -p server
 cargo build --release -p client
 ```
 
-## Cómo jugar
+## How to Play
 
-### Juego Local (misma máquina)
+### Local Game (same machine)
 
-1. **Iniciar el servidor de señalización matchbox:**
+1. **Start the matchbox signaling server:**
    ```bash
    matchbox_server
    ```
-   Esto levanta el servidor de señalización en `ws://127.0.0.1:3536`
+   This starts the signaling server at `ws://127.0.0.1:3536`
 
-2. **Iniciar el servidor de juego:**
+2. **Start the game server:**
    ```bash
    cargo run --release -p server
    ```
-   Opciones útiles:
+   Useful options:
    ```bash
-   # Con un mapa personalizado
+   # With a custom map
    cargo run --release -p server -- --map maps/futsal_fah.hbs
 
-   # Listar mapas disponibles
+   # List available maps
    cargo run --release -p server -- --list-maps
 
-   # Escalar el mapa
+   # Scale the map
    cargo run --release -p server -- --map maps/cancha_grande.json5 --scale 1.5
    ```
 
-3. **Iniciar el cliente:**
+3. **Start the client:**
    ```bash
-   cargo run --release -p client -- --name TuNombre
+   cargo run --release -p client -- --name YourName
    ```
 
-### Juego Online con ngrok
+### Online Play with ngrok
 
-Para jugar con amigos por internet, necesitas exponer el servidor de señalización usando [ngrok](https://ngrok.com/):
+To play with friends over the internet, you need to expose the signaling server using [ngrok](https://ngrok.com/):
 
-1. **Iniciar matchbox_server:**
+1. **Start matchbox_server:**
    ```bash
    matchbox_server
    ```
 
-2. **Exponer con ngrok (en otra terminal):**
+2. **Expose with ngrok (in another terminal):**
    ```bash
    ngrok http 3536
    ```
-   ngrok te dará una URL como `https://xxxxxxxxxxxx.ngrok-free.app`
+   ngrok will give you a URL like `https://xxxxxxxxxxxx.ngrok-free.app`
 
-3. **Iniciar el servidor de juego apuntando a ngrok:**
+3. **Start the game server pointing to ngrok:**
    ```bash
    cargo run --release -p server -- \
      --signaling-url wss://xxxxxxxxxxxx.ngrok-free.app \
-     --room mi_sala
+     --room my_room
    ```
 
-4. **Los clientes se conectan usando la misma URL:**
+4. **Clients connect using the same URL:**
    ```bash
    cargo run --release -p client -- \
      --server wss://xxxxxxxxxxxx.ngrok-free.app \
-     --room mi_sala \
-     --name Jugador1
+     --room my_room \
+     --name Player1
    ```
 
-**Nota:** El host que corre el servidor también puede conectarse como cliente.
+**Note:** The host running the server can also connect as a client.
 
-## Controles
+## Controls
 
-![Controles del teclado](images/keyboard.png)
+![Keyboard controls](images/keyboard.png)
 
-### Modo esfera
-Modo por defecto que permite controlar la bola y patear
+### Sphere Mode
+Default mode that allows ball control and kicking
 
-| Acción | Tecla por defecto |
-|--------|-------------------|
-| Mover | Flechas direccionales |
-| Patear | S |
-| Curva izquierda | A |
-| Curva derecha | D |
-| Sprint/Correr | Espacio |
-| No tocar pelota | Shift |
+| Action | Default Key |
+|--------|-------------|
+| Move | Arrow keys |
+| Kick | S |
+| Curve left | A |
+| Curve right | D |
+| Sprint/Run | Space |
+| Don't touch ball | Shift |
 
-### Modo cubo (Ctrl derecho)
-Permite barrer y hacer regates, siempre corre y no interactua con la pelota sin realizar acción.
-Al dejar de terner estamina vuelve al estado esfera automáticamente.
+### Cube Mode (Right Ctrl)
+Allows sliding and dribbling, always runs and doesn't interact with the ball without performing an action.
+When stamina runs out, it automatically returns to sphere mode.
 
-| Acción | Tecla por defecto |
-|--------|-------------------|
-| Barrer (slide) | S |
-| Barrer derecha | D |
-| Barrer izquierda | A |
-| Cambio de dirección | Espacio + flechas |
+| Action | Default Key |
+|--------|-------------|
+| Slide | S |
+| Slide right | D |
+| Slide left | A |
+| Direction change | Space + arrows |
 
-### Configuración
-| Acción | Tecla |
-|--------|-------------------|
-| Zoom cámara | Teclas 1-9 |
+### Settings
+| Action | Key |
+|--------|-----|
+| Camera zoom | Keys 1-9 |
 
-Las teclas se pueden reconfigurar desde el menú "Teclas" en el cliente.
+Keybindings can be reconfigured from the "Keys" menu in the client.
 
-## Estructura del Proyecto
+## Project Structure
 
 ```
 RustBall/
-├── client/          # Cliente gráfico Bevy
+├── client/          # Bevy graphical client
 │   └── src/
 │       ├── main.rs
 │       └── keybindings.rs
-├── server/          # Servidor autoritativo
+├── server/          # Authoritative server
 │   └── src/
 │       ├── main.rs
-│       ├── engine.rs    # Física y lógica de juego
+│       ├── engine.rs    # Physics and game logic
 │       ├── network.rs   # WebRTC/Matchbox
-│       ├── map/         # Carga de mapas
-│       └── input/       # Manejo de inputs
-├── shared/          # Código compartido
+│       ├── map/         # Map loading
+│       └── input/       # Input handling
+├── shared/          # Shared code
 │   └── src/
 │       ├── lib.rs
-│       ├── protocol.rs  # Mensajes de red
-│       ├── map.rs       # Estructuras de mapas
-│       └── movements.rs # Animaciones
-├── maps/            # Mapas personalizados
+│       ├── protocol.rs  # Network messages
+│       ├── map.rs       # Map structures
+│       └── movements.rs # Animations
+├── maps/            # Custom maps
 └── images/          # Assets
 ```
 
-## Mapas
+## Maps
 
-El servidor soporta mapas en formato HaxBall (`.hbs`) y JSON/JSON5. Los mapas se cargan con `--map`:
+The server supports maps in HaxBall format (`.hbs`) and JSON/JSON5. Maps are loaded with `--map`:
 
 ```bash
 cargo run -p server -- --map maps/futsal_fah.hbs
 ```
 
-Para crear mapas compatibles, puedes usar el editor de HaxBall o crearlos manualmente en JSON5.
+To create compatible maps, you can use the HaxBall editor or create them manually in JSON5.
 
-## Desarrollo Futuro
+## Future Development
 
-Este proyecto está en desarrollo activo. Algunas ideas para contribuir:
+This project is under active development. Some ideas for contribution:
 
-- Sistema de goles y marcador
-- Selección de equipos (rojo/azul)
-- Chat en el juego
-- Replay/grabación de partidas
-- Compilación a WebAssembly para jugar en el navegador
-- Sistema de salas/lobbies
-- Power-ups y modos de juego alternativos
-- Mejoras de netcode (predicción del lado del cliente, reconciliación)
-- Soporte para más formatos de mapas
-- Editor de mapas integrado
+- Goal system and scoreboard
+- Team selection (red/blue)
+- In-game chat
+- Replay/match recording
+- WebAssembly compilation for browser play
+- Room/lobby system
+- Power-ups and alternative game modes
+- Netcode improvements (client-side prediction, reconciliation)
+- Support for more map formats
+- Integrated map editor
 
-## Contribuir
+## Contributing
 
-Las contribuciones son bienvenidas. Fork el repo, crea una rama, y abre un PR.
+Contributions are welcome. Fork the repo, create a branch, and open a PR.
 
-## Licencia
+## License
 
 MIT
