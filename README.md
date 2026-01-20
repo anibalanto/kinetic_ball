@@ -1,5 +1,6 @@
-
-![kinetic_ball](images/logo.png)
+<p align="center">
+  <img src="images/logo.png" alt="kinetic_ball" width="400">
+</p>
 
 # kinetic_ball
 
