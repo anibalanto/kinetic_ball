@@ -11,7 +11,7 @@ Inspired by seeing how much could be done with just an X in HaxBall, written in 
 - Authoritative server with Rapier2D physics
 - Graphical client with Bevy 0.17
 - WebRTC peer-to-peer networking via matchbox_socket
-- Custom map support (HaxBall format `.hbs`, `.json`, `.json5`)
+- Custom map support (HaxBall format `.hbs`, `.json`, `.json5`) (Work In Progress)
 - Configurable keybindings (saved in `~/.config/rustball/keybindings.ron`)
 - Minimap and player detail camera
 - Kick system with curve/spin effect
