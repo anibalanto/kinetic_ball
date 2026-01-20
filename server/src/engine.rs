@@ -156,9 +156,8 @@ pub fn move_players(
                 let run_stamin_cost = time.delta_secs() * config.run_stamin_coeficient_cost;
 
                 // En modo cubo siempre corre, en modo normal depende de Sprint
-                let should_run = player.mode_active
-                    || (game_input.is_pressed(player_id, GameAction::Sprint)
-                        && player.stamin > run_stamin_cost);
+                let should_run =
+                    player.mode_active || game_input.is_pressed(player_id, GameAction::Sprint);
 
                 let move_coeficient = if should_run && player.stamin > run_stamin_cost {
                     player.stamin -= run_stamin_cost;
@@ -575,9 +574,14 @@ pub fn auto_touch_ball_while_running(
         }
 
         if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
-            if player_velocity.linvel.length() < 1.0 {
+            let normalized_velocity =
+                player_velocity.linvel.length() / (config.player_speed * config.run_coeficient);
+            println!("normalized_velocity {}", normalized_velocity);
+            if normalized_velocity < 1.0 {
                 continue;
             }
+
+            println!("auto_touch?");
 
             for (ball_transform, mut ball_velocity) in ball_query.iter_mut() {
                 let p_pos = player_transform.translation.truncate();
@@ -678,7 +682,7 @@ pub fn toggle_mode(
                     );
                 }
             }
-        } else if player.mode_active && player.stamin < 0.0 {
+        } else if player.mode_active && player.stamin < 0.09 {
             player.mode_active = false;
             if let Ok(sphere_entity) = sphere_query.get_mut(player.sphere) {
                 if let Ok(cube_entity) = cube_query.get_mut(player.slide_cube) {

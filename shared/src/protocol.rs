@@ -301,8 +301,8 @@ impl Default for GameConfig {
             stamin: 1.0,
             dash_stamin_cost: 0.15,
             slide_stamin_cost: 0.25,
-            run_stamin_coeficient_cost: 0.05,
-            stamin_coeficient_restore: 0.15,
+            run_stamin_coeficient_cost: 0.15,
+            stamin_coeficient_restore: 0.07,
 
             //Slide
             speed_slide_coefficient: 2.0,

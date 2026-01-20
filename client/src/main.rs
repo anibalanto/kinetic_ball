@@ -224,6 +224,8 @@ fn main() {
                 render_map,
                 interpolate_entities,
                 keep_name_horizontal,
+                keep_l_horizontal,
+                keep_r_horizontal,
                 camera_follow_player,
                 camera_zoom_control,
                 update_charge_bar,
@@ -317,6 +319,12 @@ struct DashCooldown;
 
 #[derive(Component)]
 struct PlayerNameText;
+
+#[derive(Component)]
+struct LeftText;
+
+#[derive(Component)]
+struct RightText;
 
 #[derive(Component)]
 struct PlayerSprite {
@@ -1246,64 +1254,40 @@ fn process_network_messages(
                         let angle = 25.0f32.to_radians();
 
                         // Barra de carga de patada a la izquierda
-                        parent
-                            .spawn((
-                                KickChargeBarCurveLeft,
-                                Sprite {
-                                    color: opposite_color,
-                                    custom_size: Some(Vec2::new(5.0, 5.0)),
-                                    ..default()
-                                },
-                                Anchor::CENTER_LEFT,
-                                Transform {
-                                    translation: Vec3::new(0.0, 10.0, 30.0),
-                                    // Rotación hacia la izquierda (positiva en el eje Z)
-                                    rotation: Quat::from_rotation_z(angle),
-                                    ..default()
-                                },
-                            ))
-                            .with_children(|bar| {
-                                bar.spawn((
-                                    Text2d::new("Left"),
-                                    TextFont {
-                                        font_size: 20.0,
-                                        ..default()
-                                    },
-                                    TextColor(opposite_color),
-                                    Transform::from_xyz(config.ball_radius * 2.0, 12.0, 10.0),
-                                ));
-                            });
+                        parent.spawn((
+                            KickChargeBarCurveLeft,
+                            Sprite {
+                                color: opposite_color,
+                                custom_size: Some(Vec2::new(5.0, 5.0)),
+                                ..default()
+                            },
+                            Anchor::CENTER_LEFT,
+                            Transform {
+                                translation: Vec3::new(0.0, 10.0, 30.0),
+                                // Rotación hacia la izquierda (positiva en el eje Z)
+                                rotation: Quat::from_rotation_z(angle),
+                                ..default()
+                            },
+                        ));
 
                         // Barra de carga de patada a la derecha
-                        parent
-                            .spawn((
-                                KickChargeBarCurveRight,
-                                Sprite {
-                                    color: opposite_color,
-                                    custom_size: Some(Vec2::new(5.0, 5.0)),
-                                    ..default()
-                                },
-                                Anchor::CENTER_LEFT,
-                                Transform {
-                                    translation: Vec3::new(0.0, -10.0, 30.0),
-                                    // Rotación hacia la derecha (negativa en el eje Z)
-                                    rotation: Quat::from_rotation_z(-angle),
-                                    ..default()
-                                },
-                            ))
-                            .with_children(|bar| {
-                                bar.spawn((
-                                    Text2d::new("Right"),
-                                    TextFont {
-                                        font_size: 20.0,
-                                        ..default()
-                                    },
-                                    TextColor(opposite_color),
-                                    Transform::from_xyz(config.ball_radius * 2.0, -12.0, 10.0),
-                                ));
-                            });
+                        parent.spawn((
+                            KickChargeBarCurveRight,
+                            Sprite {
+                                color: opposite_color,
+                                custom_size: Some(Vec2::new(5.0, 5.0)),
+                                ..default()
+                            },
+                            Anchor::CENTER_LEFT,
+                            Transform {
+                                translation: Vec3::new(0.0, -10.0, 30.0),
+                                // Rotación hacia la derecha (negativa en el eje Z)
+                                rotation: Quat::from_rotation_z(-angle),
+                                ..default()
+                            },
+                        ));
 
-                        let angle2 = 90.0f32.to_radians();
+                        let angle_90 = 90.0f32.to_radians();
 
                         // Barra de temporizadora de regate
                         parent.spawn((
@@ -1317,7 +1301,7 @@ fn process_network_messages(
                             Transform {
                                 translation: Vec3::new(-10.0, -15.0, 30.0),
                                 // Rotación hacia la derecha (negativa en el eje Z)
-                                rotation: Quat::from_rotation_z(angle2),
+                                rotation: Quat::from_rotation_z(angle_90),
                                 ..default()
                             },
                         ));
@@ -1332,6 +1316,37 @@ fn process_network_messages(
                             },
                             TextColor(Color::WHITE),
                             Transform::from_xyz(-config.sphere_radius * 1.5, 0.0, 10.0),
+                        ));
+
+                        parent.spawn((
+                            LeftText,
+                            Text2d::new("L"),
+                            TextFont {
+                                font_size: 40.0,
+                                ..default()
+                            },
+                            TextColor(Color::linear_rgba(1.0, 1.0, 1.0, 0.1)),
+                            Transform {
+                                translation: Vec3::new(0.0, config.ball_radius * 4.0, 10.0),
+                                // Rotación hacia la derecha (negativa en el eje Z)
+                                rotation: Quat::from_rotation_z(angle_90),
+                                ..default()
+                            },
+                        ));
+                        parent.spawn((
+                            RightText,
+                            Text2d::new("R"),
+                            TextFont {
+                                font_size: 40.0,
+                                ..default()
+                            },
+                            TextColor(Color::linear_rgba(1.0, 1.0, 1.0, 0.1)),
+                            Transform {
+                                translation: Vec3::new(0.0, -config.ball_radius * 4.0, 10.0),
+                                // Rotación hacia la derecha (negativa en el eje Z)
+                                rotation: Quat::from_rotation_z(angle_90),
+                                ..default()
+                            },
                         ));
                     });
             }
@@ -1348,6 +1363,30 @@ fn keep_name_horizontal(
         if let Ok(parent_transform) = parent_query.get(child_of.parent()) {
             // Contrarrestar la rotación del padre para que el texto quede horizontal
             name_transform.rotation = parent_transform.rotation.inverse();
+        }
+    }
+}
+
+fn keep_l_horizontal(
+    mut l_query: Query<(&mut Transform, &ChildOf), With<LeftText>>,
+    parent_query: Query<&Transform, (With<RemotePlayer>, Without<LeftText>)>,
+) {
+    for (mut l_transform, child_of) in l_query.iter_mut() {
+        if let Ok(parent_transform) = parent_query.get(child_of.parent()) {
+            // Contrarrestar la rotación del padre para que el texto quede horizontal
+            l_transform.rotation = parent_transform.rotation.inverse();
+        }
+    }
+}
+
+fn keep_r_horizontal(
+    mut r_query: Query<(&mut Transform, &ChildOf), With<RightText>>,
+    parent_query: Query<&Transform, (With<RemotePlayer>, Without<RightText>)>,
+) {
+    for (mut r_transform, child_of) in r_query.iter_mut() {
+        if let Ok(parent_transform) = parent_query.get(child_of.parent()) {
+            // Contrarrestar la rotación del padre para que el texto quede horizontal
+            r_transform.rotation = parent_transform.rotation.inverse();
         }
     }
 }
