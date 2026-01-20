@@ -1,4 +1,7 @@
-# RustBall
+
+![kinetic_ball](images/logo.png)
+
+# kinetic_ball
 
 Inspirado en ver como usuando solo una X en HaxBall podían hacer tanto, escrito en Rust usando [Bevy](https://bevyengine.org/) para el motor de juego y [Matchbox](https://github.com/johanhelsing/matchbox) para networking WebRTC peer-to-peer.
 
