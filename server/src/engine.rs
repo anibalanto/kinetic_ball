@@ -3,7 +3,6 @@
 // ============================================================================
 
 use bevy::prelude::*;
-use bevy_rapier2d::parry::query::details::contact_manifolds_composite_shape_composite_shape;
 use bevy_rapier2d::prelude::*;
 use matchbox_socket::PeerId;
 use shared::movements::{get_movement, movement_ids};
@@ -22,7 +21,7 @@ pub fn apply_kick(
     impulse: &mut ExternalImpulse,
     ball: &mut Ball,
 ) -> Vec2 {
-    let mut direction = base_direction;
+    let direction = base_direction;
 
     // Aplicamos el impulso de salida
     impulse.impulse = direction * (kick_charge.x * config.kick_force);
@@ -75,7 +74,6 @@ pub fn spawn_physics(
         .id();
 
     // Spawn del cubo de dirección/slide (inicialmente sin física)
-    let cube_size = config.sphere_radius / 3.0;
     let cube_offset = Vec2::new(config.sphere_radius * 0.7, 0.0);
 
     let slide_cube_entity = commands
@@ -205,8 +203,6 @@ pub fn handle_collision_player(
 pub fn charge_kick(
     game_input: Res<GameInputManager>,
     mut players: Query<&mut Player>,
-    mut ball_query: Query<(&Transform, &mut ExternalImpulse, &mut Ball)>,
-    sphere_query: Query<&Transform, With<Sphere>>,
     time: Res<Time>,
 ) {
     for mut player in players.iter_mut() {
@@ -228,27 +224,23 @@ pub fn charge_kick(
         let just_pressed_right = game_input.just_pressed(player_id, GameAction::CurveRight);
         let just_pressed = just_pressed_kick || just_pressed_left || just_pressed_right;
 
-        if let Ok(player_transform) = sphere_query.get(player.sphere) {
-            for (ball_transform, mut _impulse, mut _ball) in ball_query.iter_mut() {
-                if just_pressed {
-                    player.kick_charging = true;
-                    player.kick_charge = Vec2::ZERO;
-                }
+        if just_pressed {
+            player.kick_charging = true;
+            player.kick_charge = Vec2::ZERO;
+        }
 
-                if any_kick_button && player.kick_charging {
-                    player.kick_charge.x += 2.0 * time.delta_secs();
-                    if player.kick_charge.x > 1.0 {
-                        player.kick_charge.x = 1.0;
-                    }
-                    // Establecer dirección de curva
-                    if curve_right_pressed {
-                        player.kick_charge.y = -1.0;
-                    } else if curve_left_pressed {
-                        player.kick_charge.y = 1.0;
-                    } else {
-                        player.kick_charge.y = 0.0;
-                    }
-                }
+        if any_kick_button && player.kick_charging {
+            player.kick_charge.x += 2.0 * time.delta_secs();
+            if player.kick_charge.x > 1.0 {
+                player.kick_charge.x = 1.0;
+            }
+            // Establecer dirección de curva
+            if curve_right_pressed {
+                player.kick_charge.y = -1.0;
+            } else if curve_left_pressed {
+                player.kick_charge.y = 1.0;
+            } else {
+                player.kick_charge.y = 0.0;
             }
         }
     }
@@ -285,7 +277,6 @@ pub fn prepare_kick_ball(game_input: Res<GameInputManager>, mut player_query: Qu
 }
 
 pub fn look_at_ball(
-    game_input: Res<GameInputManager>,
     player_query: Query<&Player>,
     mut sphere_query: Query<&mut Transform, With<Sphere>>,
     ball_query: Query<&Transform, (With<Ball>, Without<Sphere>)>,
@@ -302,7 +293,7 @@ pub fn look_at_ball(
                     (ball_transform.translation - sphere_transform.translation).truncate();
 
                 if direction.length() > 0.0 {
-                    let mut angle = direction.y.atan2(direction.x);
+                    let angle = direction.y.atan2(direction.x);
 
                     sphere_transform.rotation = Quat::from_rotation_z(angle);
                 }
@@ -895,7 +886,6 @@ pub fn dash_first_touch_ball(
     mut player_query: Query<&mut Player>,
     sphere_query: Query<(&Transform, &Velocity), (With<Sphere>, Without<Ball>)>,
     mut ball_query: Query<(&Transform, &mut Velocity), With<Ball>>,
-    time: Res<Time>,
 ) {
     let player_diameter = config.sphere_radius * 2.0;
     let target_distance = player_diameter * 1.5;
@@ -973,29 +963,6 @@ pub fn dash_first_touch_ball(
         }
     }
 }
-
-// pub fn update_ball_damping(
-//     config: Res<GameConfig>,
-//     mut ball_query: Query<(&mut Damping, &Velocity), With<Ball>>,
-// ) {
-//     for (mut damping, velocity) in ball_query.iter_mut() {
-//         let speed = velocity.linvel.length();
-//
-//         // Damping progresivo: más roce cuando va lenta, menos cuando va rápida
-//         // Esto permite empujarla fácil pero que se detenga cuando está libre
-//         let multiplier = if speed < 30.0 {
-//             5.0  // Muy lenta: frena mucho para que se detenga
-//         } else if speed < 80.0 {
-//             3.0  // Lenta: frena bastante
-//         } else if speed < 150.0 {
-//             1.5  // Media: frena moderado
-//         } else {
-//             1.0  // Rápida: damping base (fácil de empujar/patear)
-//         };
-//
-//         damping.linear_damping = config.ball_linear_damping * multiplier;
-//     }
-// }
 
 pub fn recover_stamin(
     config: Res<GameConfig>,

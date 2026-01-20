@@ -1,8 +1,7 @@
-use bevy::math::VectorSpace;
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
-use matchbox_socket::{PeerId, PeerState, WebRtcSocket};
+use matchbox_socket::PeerId;
 use shared::*;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -397,7 +396,7 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         match map::load_map(map_path) {
             Ok(haxball_map) => {
                 let converter = map::MapConverter::new();
-                converter.spawn_map_geometry(&mut commands, &haxball_map, config.wall_restitution);
+                converter.spawn_map_geometry(&mut commands, &haxball_map);
                 true
             }
             Err(e) => {

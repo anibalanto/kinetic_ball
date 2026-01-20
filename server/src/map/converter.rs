@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
-use shared::map::{Map, Vertex, Segment, CurveConfig};
+use shared::map::{CurveConfig, Map, Segment, Vertex};
 
 pub struct MapConverter {
     curve_config: CurveConfig,
@@ -13,17 +13,8 @@ impl MapConverter {
         }
     }
 
-    pub fn with_curve_config(curve_config: CurveConfig) -> Self {
-        Self { curve_config }
-    }
-
     /// Spawnear toda la geometría del mapa en el mundo ECS
-    pub fn spawn_map_geometry(
-        &self,
-        commands: &mut Commands,
-        map: &Map,
-        default_restitution: f32,
-    ) {
+    pub fn spawn_map_geometry(&self, commands: &mut Commands, map: &Map) {
         println!("🗺️  Spawning map geometry: {}", map.name);
 
         // Spawnear segmentos (paredes)
@@ -35,10 +26,8 @@ impl MapConverter {
             }
 
             if let Some(collider) = self.segment_to_collider(segment, &map.vertexes) {
-                let collision_groups = self.compute_collision_groups(
-                    segment.c_mask.as_ref(),
-                    segment.c_group.as_ref(),
-                );
+                let collision_groups = self
+                    .compute_collision_groups(segment.c_mask.as_ref(), segment.c_group.as_ref());
 
                 let restitution = segment.b_coef;
 
@@ -53,17 +42,17 @@ impl MapConverter {
 
                 let v0 = &map.vertexes[segment.v0];
                 let v1 = &map.vertexes[segment.v1];
-                println!("  ✓ Segment {}: v{}({:.0},{:.0}) → v{}({:.0},{:.0})",
-                    i, segment.v0, v0.x, v0.y, segment.v1, v1.x, v1.y);
+                println!(
+                    "  ✓ Segment {}: v{}({:.0},{:.0}) → v{}({:.0},{:.0})",
+                    i, segment.v0, v0.x, v0.y, segment.v1, v1.x, v1.y
+                );
             }
         }
 
         // Spawnear discos
         for (i, disc) in map.discs.iter().enumerate() {
-            let collision_groups = self.compute_collision_groups(
-                disc.c_mask.as_ref(),
-                disc.c_group.as_ref(),
-            );
+            let collision_groups =
+                self.compute_collision_groups(disc.c_mask.as_ref(), disc.c_group.as_ref());
 
             commands.spawn((
                 RigidBody::Fixed,
@@ -74,12 +63,17 @@ impl MapConverter {
                 GlobalTransform::default(),
             ));
 
-            println!("  ✓ Disc {}: pos=({:.0}, {:.0}), r={:.0}",
-                i, disc.pos[0], disc.pos[1], disc.radius);
+            println!(
+                "  ✓ Disc {}: pos=({:.0}, {:.0}), r={:.0}",
+                i, disc.pos[0], disc.pos[1], disc.radius
+            );
         }
 
-        println!("✅ Spawned {} segments, {} discs",
-            map.segments.len(), map.discs.len());
+        println!(
+            "✅ Spawned {} segments, {} discs",
+            map.segments.len(),
+            map.discs.len()
+        );
     }
 
     /// Convertir segmento a collider (maneja rectos y curvos)
@@ -101,10 +95,7 @@ impl MapConverter {
             let points = self.approximate_curve(p0, p1, curve_factor);
 
             // Convertir Vec<Vec2> a Vec<Point>
-            let rapier_points: Vec<_> = points
-                .into_iter()
-                .map(|p| [p.x, p.y].into())
-                .collect();
+            let rapier_points: Vec<_> = points.into_iter().map(|p| [p.x, p.y].into()).collect();
 
             Some(Collider::polyline(rapier_points, None))
         }
@@ -186,10 +177,13 @@ impl MapConverter {
             filters = self.parse_group_filters(masks);
 
             // Usar memberships especiales según cMask
-            if masks.iter().any(|m| m == "ball") && !masks.iter().any(|m| m == "red" || m == "blue") {
+            if masks.iter().any(|m| m == "ball") && !masks.iter().any(|m| m == "red" || m == "blue")
+            {
                 // Solo pelota: usar GROUP_5
                 memberships = Group::GROUP_5;
-            } else if masks.iter().any(|m| m == "red" || m == "blue") && !masks.iter().any(|m| m == "ball") {
+            } else if masks.iter().any(|m| m == "red" || m == "blue")
+                && !masks.iter().any(|m| m == "ball")
+            {
                 // Solo jugadores: usar GROUP_6
                 memberships = Group::GROUP_6;
             }

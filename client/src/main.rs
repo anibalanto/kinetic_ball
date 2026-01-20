@@ -7,12 +7,9 @@ use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
 use matchbox_socket::WebRtcSocket;
-use serde::Serialize;
 use shared::movements::{get_movement, AnimatedProperty};
 use shared::protocol::PlayerMovement;
-use shared::protocol::{
-    ControlMessage, GameConfig, GameDataMessage, NetworkInputType, PlayerInput, ServerMessage,
-};
+use shared::protocol::{ControlMessage, GameConfig, GameDataMessage, PlayerInput, ServerMessage};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -278,9 +275,6 @@ struct DefaultFieldLine;
 struct MinimapFieldLine;
 
 #[derive(Component)]
-struct MinimapFrame;
-
-#[derive(Component)]
 struct FieldBackground;
 
 #[derive(Component)]
@@ -525,7 +519,7 @@ fn settings_ui(
             }
 
             // Grid de keybindings
-            egui::Frame::none().inner_margin(20.0).show(ui, |ui| {
+            egui::Frame::new().inner_margin(20.0).show(ui, |ui| {
                 egui::Grid::new("keybindings_grid")
                     .num_columns(2)
                     .spacing([40.0, 8.0])
@@ -691,7 +685,7 @@ async fn start_webrtc_client(
     room: String,
     player_name: String,
     network_tx: mpsc::Sender<ServerMessage>,
-    mut input_rx: mpsc::Receiver<PlayerInput>,
+    input_rx: mpsc::Receiver<PlayerInput>,
 ) {
     println!(
         "🔌 [Red] Conectando a matchbox en {}/{}",
@@ -728,7 +722,6 @@ async fn start_webrtc_client(
                 // Nuevo peer, enviar JOIN
                 let join_msg = ControlMessage::Join {
                     player_name: player_name.clone(),
-                    input_type: NetworkInputType::Keyboard,
                 };
                 if let Ok(data) = bincode::serialize(&join_msg) {
                     println!("📤 [Red] Enviando JOIN a peer {:?}...", peer_id);
@@ -742,11 +735,7 @@ async fn start_webrtc_client(
         for (peer_id, packet) in socket.channel_mut(0).receive() {
             if let Ok(msg) = bincode::deserialize::<ControlMessage>(&packet) {
                 match msg {
-                    ControlMessage::Welcome {
-                        player_id,
-                        game_config,
-                        map,
-                    } => {
+                    ControlMessage::Welcome { player_id, map } => {
                         println!(
                             "🎉 [Red] WELCOME recibido de peer {:?}! Player ID: {}",
                             peer_id, player_id
@@ -755,11 +744,7 @@ async fn start_webrtc_client(
                         server_peer_id = Some(peer_id);
 
                         // Convertir a ServerMessage para compatibilidad con el código existente
-                        let server_msg = ServerMessage::Welcome {
-                            player_id,
-                            game_config,
-                            map,
-                        };
+                        let server_msg = ServerMessage::Welcome { player_id, map };
                         let _ = network_tx.send(server_msg);
 
                         // Enviar READY al servidor real
@@ -815,7 +800,7 @@ async fn start_webrtc_client(
         // Enviar inputs desde Bevy (solo si ya identificamos al servidor)
         if let Some(server_id) = server_peer_id {
             while let Ok(input) = input_rx.try_recv() {
-                let input_msg = GameDataMessage::Input { sequence: 0, input };
+                let input_msg = GameDataMessage::Input { input };
                 if let Ok(data) = bincode::serialize(&input_msg) {
                     socket.channel_mut(1).send(data.into(), server_id); // Canal 1 = unreliable
                 }
@@ -834,12 +819,7 @@ async fn start_webrtc_client(
 // GAME SYSTEMS
 // ============================================================================
 
-fn setup(
-    mut commands: Commands,
-    config: Res<GameConfig>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-) {
+fn setup(mut commands: Commands, config: Res<GameConfig>) {
     // Cámara principal - Layer 0 (todo excepto minimap dots)
     commands.spawn((
         Camera2d,
@@ -1105,7 +1085,6 @@ fn process_network_messages(
             &mut Interpolated,
             &mut Transform,
             &mut RemotePlayer,
-            &mut Collider,
             &Children,
         ),
         (Without<RemoteBall>, Without<MainCamera>),
@@ -1119,12 +1098,11 @@ fn process_network_messages(
     children_query: Query<&Children>,
     mut text_color_query: Query<&mut TextColor>,
     mut game_tick: ResMut<GameTick>,
-    keybindings: Res<KeyBindingsConfig>,
 ) {
     let Some(ref receiver) = channels.receiver else {
         return;
     };
-    let mut rx = receiver.lock().unwrap();
+    let rx = receiver.lock().unwrap();
     let mut spawned_this_frame = std::collections::HashSet::new();
 
     // Procesar solo el último GameState si hay múltiples (incluye tick)
@@ -1141,11 +1119,7 @@ fn process_network_messages(
 
     for msg in messages {
         match msg {
-            ServerMessage::Welcome {
-                player_id,
-                game_config,
-                map,
-            } => {
+            ServerMessage::Welcome { player_id, map } => {
                 println!("🎉 [Bevy] Welcome recibido. Mi PlayerID es: {}", player_id);
                 my_id.0 = Some(player_id);
 
@@ -1201,7 +1175,7 @@ fn process_network_messages(
                     get_team_colors(team_index, &config.team_colors);
 
                 // 3. Actualizar jugadores de ese equipo
-                for (_, _, _, player, _, children) in players_q.iter() {
+                for (_, _, _, player, children) in players_q.iter() {
                     if player.team_index != team_index {
                         continue;
                     }
@@ -1234,7 +1208,7 @@ fn process_network_messages(
             }
             ServerMessage::PlayerDisconnected { player_id } => {
                 // Buscar y eliminar el jugador desconectado
-                for (entity, _, _, rp, _, _) in players_q.iter() {
+                for (entity, _, _, rp, _) in players_q.iter() {
                     if rp.id == player_id {
                         commands.entity(entity).despawn();
                         println!("👋 [Bevy] Jugador {} eliminado del juego", player_id);
@@ -1292,9 +1266,7 @@ fn process_network_messages(
         // Actualizar Jugadores
         for ps in players {
             let mut found = false;
-            for (_entity, mut interp, mut transform, mut rp, mut collider, _children) in
-                players_q.iter_mut()
-            {
+            for (_entity, mut interp, mut transform, mut rp, _children) in players_q.iter_mut() {
                 if rp.id == ps.id {
                     interp.target_position = ps.position;
                     interp.target_velocity = Vec2::new(ps.velocity.0, ps.velocity.1);
@@ -2130,8 +2102,6 @@ fn spawn_minimap_dots(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     config: Res<GameConfig>,
-    players_without_dots: Query<(Entity, &RemotePlayer), Without<Children>>,
-    ball_without_dots: Query<Entity, (With<RemoteBall>, Without<Children>)>,
     existing_dots: Query<&MinimapDot>,
     players_with_dots: Query<(Entity, &RemotePlayer)>,
     ball_with_dots: Query<Entity, With<RemoteBall>>,

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use crate::engine::spawn_physics;
 use crate::{
     Ball, BroadcastTimer, GameInputManager, GameTick, LoadedMap, NetworkEvent, NetworkReceiver,
-    NetworkSender, NetworkState, OutgoingMessage, Player, SlideCube, Sphere,
+    NetworkSender, NetworkState, OutgoingMessage, Player, Sphere,
 };
 
 // ============================================================================
@@ -103,16 +103,6 @@ pub fn start_webrtc_server(
     });
 }
 
-pub fn peer_id_to_u32(peer_id: PeerId) -> u32 {
-    // Convertir PeerId (UUID) a u32 usando hash
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = DefaultHasher::new();
-    peer_id.hash(&mut hasher);
-    hasher.finish() as u32
-}
-
 pub fn handle_control_message_typed(
     event_tx: &mpsc::Sender<NetworkEvent>,
     state: &Arc<Mutex<NetworkState>>,
@@ -120,15 +110,12 @@ pub fn handle_control_message_typed(
     msg: ControlMessage,
 ) {
     match msg {
-        ControlMessage::Join {
-            player_name,
-            input_type,
-        } => {
-            let (id, config, map) = {
+        ControlMessage::Join { player_name } => {
+            let id = {
                 let mut s = state.lock().unwrap();
                 let id = s.next_player_id;
                 s.next_player_id += 1;
-                (id, s.game_config.clone(), s.map.clone())
+                id
             };
 
             println!("🎮 Player {} joined: {}", id, player_name);
@@ -158,11 +145,11 @@ pub fn handle_game_data_message_typed(
     msg: GameDataMessage,
 ) {
     match msg {
-        GameDataMessage::Input { sequence, input } => {
+        GameDataMessage::Input { input } => {
             let _ = event_tx.send(NetworkEvent::PlayerInput { peer_id, input });
         }
         GameDataMessage::Ping { timestamp } => {
-            // TODO: Responder con Pong
+            println!("Debería responder con Pong {}", timestamp);
         }
         _ => {
             // Otros mensajes del servidor no deberían venir del cliente
@@ -176,7 +163,7 @@ pub fn update_input_manager(mut game_input: ResMut<GameInputManager>) {
 
 pub fn process_network_messages(
     mut commands: Commands,
-    mut network_rx: ResMut<NetworkReceiver>,
+    network_rx: ResMut<NetworkReceiver>,
     network_tx: Res<NetworkSender>,
     config: Res<GameConfig>,
     loaded_map: Res<LoadedMap>,
@@ -192,7 +179,6 @@ pub fn process_network_messages(
                 // Enviar WELCOME al nuevo jugador
                 let welcome_msg = ControlMessage::Welcome {
                     player_id: id,
-                    game_config: config.clone(),
                     map: loaded_map.0.clone(),
                 };
 
@@ -216,7 +202,11 @@ pub fn process_network_messages(
                         if input.move_up || input.move_down || input.move_left || input.move_right {
                             println!(
                                 "🎮 [{}] up={} down={} left={} right={}",
-                                player.name, input.move_up, input.move_down, input.move_left, input.move_right
+                                player.name,
+                                input.move_up,
+                                input.move_down,
+                                input.move_left,
+                                input.move_right
                             );
                         }
                         game_input.update_input(player.id, input.clone());
@@ -244,7 +234,10 @@ pub fn process_network_messages(
                         commands.entity(entity).despawn();
                         // Remover del GameInputManager
                         game_input.remove_player(player.id);
-                        println!("❌ Jugador {} ({}) desconectado y removido", player.name, player.id);
+                        println!(
+                            "❌ Jugador {} ({}) desconectado y removido",
+                            player.name, player.id
+                        );
                         break;
                     }
                 }
@@ -268,7 +261,6 @@ pub fn process_network_messages(
 
 pub fn broadcast_game_state(
     time: Res<Time>,
-    config: Res<GameConfig>,
     mut broadcast_timer: ResMut<BroadcastTimer>,
     mut tick: ResMut<GameTick>,
     players: Query<&Player>,

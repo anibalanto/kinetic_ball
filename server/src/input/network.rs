@@ -20,10 +20,6 @@ impl NetworkInputSource {
     pub fn set_input(&mut self, input: PlayerInput) {
         self.current = input;
     }
-
-    pub fn update(&mut self) {
-        self.previous = self.current.clone();
-    }
 }
 
 impl InputSource for NetworkInputSource {

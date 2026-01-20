@@ -12,14 +12,12 @@ pub enum ControlMessage {
     // Del cliente
     Join {
         player_name: String,
-        input_type: NetworkInputType,
     },
     Ready,
 
     // Del servidor
     Welcome {
         player_id: u32,
-        game_config: GameConfig,
         map: Option<Map>,
     },
     PlayerDisconnected {
@@ -44,7 +42,6 @@ pub enum ControlMessage {
 pub enum GameDataMessage {
     // Del cliente
     Input {
-        sequence: u32,
         input: PlayerInput,
     },
     Ping {
@@ -113,7 +110,6 @@ pub struct PlayerInput {
 pub enum ServerMessage {
     Welcome {
         player_id: u32,
-        game_config: GameConfig,
         map: Option<Map>,
     },
 
