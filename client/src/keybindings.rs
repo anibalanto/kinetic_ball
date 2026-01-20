@@ -206,7 +206,7 @@ impl Default for KeyBindingsConfig {
             curve_right: SerializableKeyCode(KeyCode::KeyA),
             stop_interact: SerializableKeyCode(KeyCode::ShiftLeft),
             sprint: SerializableKeyCode(KeyCode::Space),
-            mode: SerializableKeyCode(KeyCode::ControlLeft),
+            mode: SerializableKeyCode(KeyCode::ControlRight),
         }
     }
 }
@@ -254,7 +254,7 @@ impl GameAction {
             GameAction::Kick => "Patear",
             GameAction::CurveLeft => "Curva Izquierda",
             GameAction::CurveRight => "Curva Derecha",
-            GameAction::StopInteract => "Frenar",
+            GameAction::StopInteract => "No interactuar",
             GameAction::Sprint => "Sprint",
             GameAction::Mode => "Modo",
         }
