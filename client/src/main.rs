@@ -836,7 +836,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>) {
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
-            scale: 1.3, // Reducido de 2.0 para ver el campo más grande
+            scale: 3.0, // Reducido de 2.0 para ver el campo más grande
             ..OrthographicProjection::default_2d()
         }),
         Transform::from_xyz(0.0, 0.0, 999.0),
