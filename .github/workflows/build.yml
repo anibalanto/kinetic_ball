@@ -3,7 +3,7 @@ name: Build
 on:
   push:
     branches: [master, main]
-    tags: ['v*']
+    tags: ["v*"]
   pull_request:
     branches: [master, main]
 
@@ -13,6 +13,7 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -21,6 +22,12 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: client.exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: client
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: client
 
     runs-on: ${{ matrix.os }}
 
@@ -40,6 +47,8 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Build client and server
         run: cargo build -p client -p server --release --target ${{ matrix.target }}
@@ -54,9 +63,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: server-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/server${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          path: target/${{ matrix.target }}/release/server${{ contains(matrix.os, 'windows') && '.exe' || '' }}
 
-  # Release automático cuando pusheas un tag
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
