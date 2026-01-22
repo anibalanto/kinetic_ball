@@ -3,7 +3,7 @@ name: Build
 on:
   push:
     branches: [master, main]
-    tags: ['v*']
+    tags: ["v*"]
   pull_request:
     branches: [master, main]
 
@@ -13,14 +13,21 @@ env:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: client
+            artifact_name: client
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: client.exe
+            artifact_name: client.exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: client
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: client
 
     runs-on: ${{ matrix.os }}
 
@@ -40,23 +47,31 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Build client and server
         run: cargo build -p client -p server --release --target ${{ matrix.target }}
 
-      - name: Upload client artifact
+      # PASO CLAVE: Renombrar binarios para evitar colisiones
+      - name: Prepare artifacts
+        shell: bash
+        run: |
+          mkdir -p out/
+          # Determinar extensión de servidor
+          SERVER_EXT=""
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then SERVER_EXT=".exe"; fi
+
+          # Copiar y renombrar binarios
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} out/client-${{ matrix.target }}${{ contains(matrix.os, 'windows') && '.exe' || '' }}
+          cp target/${{ matrix.target }}/release/server${SERVER_EXT} out/server-${{ matrix.target }}${SERVER_EXT}
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: client-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/${{ matrix.artifact }}
+          name: binarios-${{ matrix.target }}
+          path: out/*
 
-      - name: Upload server artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: server-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/server${{ matrix.os == 'windows-latest' && '.exe' || '' }}
-
-  # Release automático cuando pusheas un tag
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
@@ -68,10 +83,11 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: all_artifacts
+          merge-multiple: true # Esto evita que se creen subcarpetas innecesarias
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*
+          files: all_artifacts/*
           generate_release_notes: true
