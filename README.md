@@ -6,7 +6,10 @@
 
 Inspired by seeing how much could be done with just an X in HaxBall, written in Rust using [Bevy](https://bevyengine.org/) as the game engine and [Matchbox](https://github.com/johanhelsing/matchbox) for WebRTC peer-to-peer networking.
 
-![Texto descriptivo](images/kinetic_ball.mp4)
+[kinetic_ball.webm](https://github.com/user-attachments/assets/be8b2554-8de4-4d9b-b5e9-213c9693464f)
+
+
+
 
 ## Features
 
