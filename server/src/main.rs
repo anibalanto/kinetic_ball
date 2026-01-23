@@ -32,17 +32,21 @@ struct Cli {
     #[arg(short, long)]
     list_maps: bool,
 
-    /// Puerto del servidor de juego (WebRTC data channels)
-    #[arg(short, long, default_value = "9000")]
-    port: u16,
-
-    /// URL del servidor de señalización matchbox (ej: ws://localhost:3536 o wss://matchbox.ejemplo.com)
-    #[arg(long, default_value = "ws://127.0.0.1:3536")]
-    signaling_url: String,
-
-    /// Nombre de la sala/room en matchbox
-    #[arg(long, default_value = "game_server")]
+    /// Nombre de la sala/room
+    #[arg(short, long, default_value = "game_server")]
     room: String,
+
+    /// URL del proxy. Ejemplo: http://localhost:3537 o https://proxy.ejemplo.com
+    #[arg(long, default_value = "http://127.0.0.1:3537")]
+    proxy_url: String,
+
+    /// Nombre descriptivo de la sala
+    #[arg(long, default_value = "Game Room")]
+    room_name: String,
+
+    /// Número máximo de jugadores
+    #[arg(long, default_value = "8")]
+    max_players: u8,
 }
 
 fn main() {
@@ -65,6 +69,9 @@ fn main() {
     }
 
     println!("🎮 Haxball Server - Iniciando...");
+
+    // Clone map path for later use in proxy registration
+    let map_name_for_proxy = cli.map.clone();
 
     // Configurar GameConfig con el mapa desde CLI
     let (game_config, loaded_map) = if let Some(map_path) = cli.map {
@@ -102,15 +109,7 @@ fn main() {
         (GameConfig::default(), None)
     };
 
-    // IMPORTANTE: Se requiere ejecutar matchbox_server (o tener uno accesible en la URL configurada)
-    // cargo install matchbox_server
-    // matchbox_server
-
-    println!(
-        "⚠️  Asegúrate de tener matchbox_server accesible en: {}",
-        cli.signaling_url
-    );
-    println!("   Para local: matchbox_server");
+    println!("🌐 Conectando al proxy en: {}", cli.proxy_url);
 
     let (network_tx, network_rx) = mpsc::channel();
     let (outgoing_tx, outgoing_rx) = mpsc::channel();
@@ -122,11 +121,23 @@ fn main() {
         map: loaded_map.clone(),
     }));
 
-    // Iniciar servidor WebRTC (se conecta a matchbox como peer)
-    let signaling_url = cli.signaling_url.clone();
+    // Iniciar servidor WebRTC (se conecta al proxy)
     let room = cli.room.clone();
+    let proxy_url = cli.proxy_url.clone();
+    let room_name = cli.room_name.clone();
+    let max_players = cli.max_players;
+    let map_name = map_name_for_proxy;
     std::thread::spawn(move || {
-        start_webrtc_server(network_tx, network_state, signaling_url, room, outgoing_rx);
+        start_webrtc_server(
+            network_tx,
+            network_state,
+            room,
+            outgoing_rx,
+            proxy_url,
+            room_name,
+            max_players,
+            map_name,
+        );
     });
 
     App::new()

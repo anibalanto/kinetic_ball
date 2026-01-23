@@ -18,9 +18,12 @@ use crate::{
 pub fn start_webrtc_server(
     event_tx: mpsc::Sender<NetworkEvent>,
     state: Arc<Mutex<NetworkState>>,
-    signaling_url: String,
     room: String,
     outgoing_rx: mpsc::Receiver<OutgoingMessage>,
+    proxy_url: String,
+    room_name: String,
+    max_players: u8,
+    map_name: Option<String>,
 ) {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -28,13 +31,24 @@ pub fn start_webrtc_server(
         .expect("No se pudo crear el runtime de Tokio");
 
     rt.block_on(async {
-        println!(
-            "🌐 Server connecting to matchbox at {}/{}",
-            signaling_url, room
-        );
+        // Registrar la room en el proxy y obtener token
+        let room_url = match register_room_with_proxy(&proxy_url, &room, &room_name, max_players, map_name.as_deref()).await {
+            Ok(token) => {
+                println!("✅ Room '{}' registrada en proxy", room);
+                // Convertir HTTP URL a WS URL y conectar con token
+                let ws_proxy = proxy_url.replace("http://", "ws://").replace("https://", "wss://");
+                format!("{}/connect?token={}", ws_proxy, token)
+            }
+            Err(e) => {
+                eprintln!("❌ Error registrando room en proxy: {}", e);
+                eprintln!("   Asegúrate de que el proxy está corriendo en {}", proxy_url);
+                return;
+            }
+        };
+
+        println!("🔗 Connecting to: {}", room_url);
 
         // Crear WebRtcSocket y conectar a la room
-        let room_url = format!("{}/{}", signaling_url, room);
         let (mut socket, loop_fut) = WebRtcSocket::builder(room_url)
             .add_channel(matchbox_socket::ChannelConfig::reliable()) // Canal 0: Control (reliable)
             .add_channel(matchbox_socket::ChannelConfig::unreliable()) // Canal 1: GameData (unreliable)
@@ -377,5 +391,61 @@ pub fn broadcast_game_state(
                 });
             }
         }
+    }
+}
+
+// ============================================================================
+// PROXY REGISTRATION
+// ============================================================================
+
+#[derive(serde::Serialize)]
+struct CreateRoomRequest {
+    room_id: String,
+    name: String,
+    max_players: u8,
+    map_name: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct CreateRoomResponse {
+    token: String,
+}
+
+async fn register_room_with_proxy(
+    proxy_url: &str,
+    room_id: &str,
+    room_name: &str,
+    max_players: u8,
+    map_name: Option<&str>,
+) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/rooms", proxy_url);
+
+    let request = CreateRoomRequest {
+        room_id: room_id.to_string(),
+        name: room_name.to_string(),
+        max_players,
+        map_name: map_name.map(|s| s.to_string()),
+    };
+
+    println!("📡 Registering room '{}' with proxy at {}", room_id, proxy_url);
+
+    let response = client
+        .post(&url)
+        .json(&request)
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    if response.status().is_success() {
+        let body: CreateRoomResponse = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        Ok(body.token)
+    } else {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(format!("Proxy returned error {}: {}", status, body))
     }
 }

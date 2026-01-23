@@ -37,11 +37,11 @@ struct GameTick(u32);
 #[command(name = "Haxball Client")]
 #[command(about = "Cliente del juego Haxball", long_about = None)]
 struct Args {
-    /// URL del servidor de señalización matchbox (ej: ws://localhost:3536)
-    #[arg(short, long, default_value = "ws://127.0.0.1:3536")]
+    /// URL del proxy. Ejemplo: ws://localhost:3537 o wss://proxy.ejemplo.com
+    #[arg(short, long, default_value = "ws://127.0.0.1:3537")]
     server: String,
 
-    /// Nombre de la sala/room en matchbox
+    /// Nombre de la sala/room
     #[arg(short, long, default_value = "game_server")]
     room: String,
 
@@ -59,8 +59,48 @@ enum AppState {
     #[default]
     Menu,
     Settings,
+    RoomSelection,
     Connecting,
     InGame,
+}
+
+// ============================================================================
+// ROOM INFO (from proxy API)
+// ============================================================================
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RoomStatus {
+    Open,
+    Full,
+    Closed,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RoomInfo {
+    room_id: String,
+    name: String,
+    max_players: u8,
+    current_players: u8,
+    map_name: Option<String>,
+    status: RoomStatus,
+}
+
+#[derive(Resource, Default)]
+struct RoomList {
+    rooms: Vec<RoomInfo>,
+    loading: bool,
+    error: Option<String>,
+}
+
+#[derive(Resource, Default)]
+struct RoomFetchChannel {
+    receiver: Option<Arc<Mutex<mpsc::Receiver<Result<Vec<RoomInfo>, String>>>>>,
+}
+
+#[derive(Resource, Default)]
+struct SelectedRoom {
+    room_id: Option<String>,
 }
 
 // ============================================================================
@@ -188,6 +228,10 @@ fn main() {
         // Keybindings configurables
         .insert_resource(load_keybindings())
         .insert_resource(SettingsUIState::default())
+        // Room selection resources
+        .insert_resource(RoomList::default())
+        .insert_resource(RoomFetchChannel::default())
+        .insert_resource(SelectedRoom::default())
         // Cargar assets embebidos al inicio (antes de todo)
         .add_systems(Startup, load_embedded_assets)
         // Sistemas de menú (solo en estado Menu)
@@ -201,6 +245,16 @@ fn main() {
         .add_systems(
             EguiPrimaryContextPass,
             settings_ui.run_if(in_state(AppState::Settings)),
+        )
+        // Sistemas de selección de sala (solo en estado RoomSelection)
+        .add_systems(OnEnter(AppState::RoomSelection), (setup_menu_camera, fetch_rooms))
+        .add_systems(
+            EguiPrimaryContextPass,
+            room_selection_ui.run_if(in_state(AppState::RoomSelection)),
+        )
+        .add_systems(
+            Update,
+            check_rooms_fetch.run_if(in_state(AppState::RoomSelection)),
         )
         // Sistema de conexión (solo en estado Connecting)
         .add_systems(OnEnter(AppState::Connecting), start_connection)
@@ -411,7 +465,7 @@ fn menu_ui(
         ui.vertical_centered(|ui| {
             ui.add_space(100.0);
 
-            ui.heading(egui::RichText::new("🏈 RustBall").size(48.0));
+            ui.heading(egui::RichText::new("RustBall").size(48.0));
             ui.add_space(40.0);
 
             // Contenedor para los campos
@@ -424,12 +478,6 @@ fn menu_ui(
                         [300.0, 24.0],
                         egui::TextEdit::singleline(&mut config.server_url),
                     );
-                });
-                ui.add_space(10.0);
-
-                ui.horizontal(|ui| {
-                    ui.label("Sala:");
-                    ui.add_sized([300.0, 24.0], egui::TextEdit::singleline(&mut config.room));
                 });
                 ui.add_space(10.0);
 
@@ -447,19 +495,16 @@ fn menu_ui(
             ui.horizontal(|ui| {
                 ui.add_space(40.0);
 
-                // Botón Conectar
+                // Botón Ver Salas
                 if ui
                     .add_sized(
                         [150.0, 50.0],
-                        egui::Button::new(egui::RichText::new("Conectar").size(20.0)),
+                        egui::Button::new(egui::RichText::new("Ver Salas").size(20.0)),
                     )
                     .clicked()
                 {
-                    println!(
-                        "🔌 Conectando a {} como {}",
-                        config.server_url, config.player_name
-                    );
-                    next_state.set(AppState::Connecting);
+                    println!("📋 Buscando salas en {}", config.server_url);
+                    next_state.set(AppState::RoomSelection);
                 }
 
                 ui.add_space(20.0);
@@ -638,6 +683,304 @@ fn settings_ui(
     });
 }
 
+// ============================================================================
+// ROOM SELECTION SYSTEMS
+// ============================================================================
+
+fn fetch_rooms(
+    config: Res<ConnectionConfig>,
+    mut room_list: ResMut<RoomList>,
+    mut fetch_channel: ResMut<RoomFetchChannel>,
+) {
+    room_list.loading = true;
+    room_list.error = None;
+    room_list.rooms.clear();
+
+    let (tx, rx) = mpsc::channel();
+    fetch_channel.receiver = Some(Arc::new(Mutex::new(rx)));
+
+    // Convertir ws:// a http:// para la API REST
+    let api_url = config
+        .server_url
+        .replace("ws://", "http://")
+        .replace("wss://", "https://");
+    let url = format!("{}/api/rooms", api_url);
+
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create tokio runtime");
+
+        let result = rt.block_on(async {
+            let client = reqwest::Client::new();
+            match client.get(&url).send().await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        match response.json::<Vec<RoomInfo>>().await {
+                            Ok(rooms) => Ok(rooms),
+                            Err(e) => Err(format!("Error parsing response: {}", e)),
+                        }
+                    } else {
+                        Err(format!("Server error: {}", response.status()))
+                    }
+                }
+                Err(e) => Err(format!("Connection error: {}", e)),
+            }
+        });
+
+        let _ = tx.send(result);
+    });
+}
+
+fn check_rooms_fetch(
+    mut room_list: ResMut<RoomList>,
+    mut fetch_channel: ResMut<RoomFetchChannel>,
+) {
+    let result = if let Some(ref rx) = fetch_channel.receiver {
+        if let Ok(guard) = rx.lock() {
+            guard.try_recv().ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(result) = result {
+        match result {
+            Ok(rooms) => {
+                println!("📋 {} salas encontradas", rooms.len());
+                room_list.rooms = rooms;
+                room_list.loading = false;
+            }
+            Err(e) => {
+                println!("❌ Error fetching rooms: {}", e);
+                room_list.error = Some(e);
+                room_list.loading = false;
+            }
+        }
+        fetch_channel.receiver = None;
+    }
+}
+
+fn room_selection_ui(
+    mut contexts: EguiContexts,
+    mut config: ResMut<ConnectionConfig>,
+    mut room_list: ResMut<RoomList>,
+    mut selected_room: ResMut<SelectedRoom>,
+    mut next_state: ResMut<NextState<AppState>>,
+    mut fetch_channel: ResMut<RoomFetchChannel>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    egui::CentralPanel::default().show(ctx, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.add_space(30.0);
+            ui.heading(egui::RichText::new("Salas Disponibles").size(36.0));
+            ui.add_space(20.0);
+
+            // Botones superiores
+            ui.horizontal(|ui| {
+                if ui
+                    .add_sized(
+                        [100.0, 30.0],
+                        egui::Button::new(egui::RichText::new("← Volver").size(16.0)),
+                    )
+                    .clicked()
+                {
+                    next_state.set(AppState::Menu);
+                }
+
+                ui.add_space(20.0);
+
+                let refresh_enabled = !room_list.loading;
+                if ui
+                    .add_enabled(
+                        refresh_enabled,
+                        egui::Button::new(egui::RichText::new("🔄 Actualizar").size(16.0)),
+                    )
+                    .clicked()
+                {
+                    // Trigger refresh
+                    room_list.loading = true;
+                    room_list.error = None;
+
+                    let api_url = config
+                        .server_url
+                        .replace("ws://", "http://")
+                        .replace("wss://", "https://");
+                    let url = format!("{}/api/rooms", api_url);
+
+                    let (tx, rx) = mpsc::channel();
+                    fetch_channel.receiver = Some(Arc::new(Mutex::new(rx)));
+
+                    std::thread::spawn(move || {
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .enable_all()
+                            .build()
+                            .expect("Failed to create tokio runtime");
+
+                        let result = rt.block_on(async {
+                            let client = reqwest::Client::new();
+                            match client.get(&url).send().await {
+                                Ok(response) => {
+                                    if response.status().is_success() {
+                                        match response.json::<Vec<RoomInfo>>().await {
+                                            Ok(rooms) => Ok(rooms),
+                                            Err(e) => Err(format!("Error parsing response: {}", e)),
+                                        }
+                                    } else {
+                                        Err(format!("Server error: {}", response.status()))
+                                    }
+                                }
+                                Err(e) => Err(format!("Connection error: {}", e)),
+                            }
+                        });
+
+                        let _ = tx.send(result);
+                    });
+                }
+            });
+
+            ui.add_space(20.0);
+
+            // Estado de carga o error
+            if room_list.loading {
+                ui.spinner();
+                ui.label("Cargando salas...");
+            } else if let Some(ref error) = room_list.error {
+                ui.colored_label(egui::Color32::RED, format!("Error: {}", error));
+            }
+
+            ui.add_space(10.0);
+
+            // Lista de salas
+            egui::ScrollArea::vertical()
+                .max_height(400.0)
+                .show(ui, |ui| {
+                    if room_list.rooms.is_empty() && !room_list.loading {
+                        ui.label("No hay salas disponibles");
+                    }
+
+                    for room in &room_list.rooms {
+                        let is_selected = selected_room.room_id.as_ref() == Some(&room.room_id);
+                        let is_full = matches!(room.status, RoomStatus::Full);
+
+                        let frame = if is_selected {
+                            egui::Frame::new()
+                                .fill(egui::Color32::from_rgb(60, 80, 120))
+                                .inner_margin(10.0)
+                                .corner_radius(5.0)
+                        } else {
+                            egui::Frame::new()
+                                .fill(egui::Color32::from_rgb(40, 40, 50))
+                                .inner_margin(10.0)
+                                .corner_radius(5.0)
+                        };
+
+                        frame.show(ui, |ui| {
+                            ui.set_width(500.0);
+
+                            let response = ui.interact(
+                                ui.max_rect(),
+                                ui.id().with(&room.room_id),
+                                egui::Sense::click(),
+                            );
+
+                            ui.horizontal(|ui| {
+                                // Nombre de la sala
+                                ui.label(
+                                    egui::RichText::new(&room.name)
+                                        .size(18.0)
+                                        .strong(),
+                                );
+
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        // Status
+                                        let (status_text, status_color) = match room.status {
+                                            RoomStatus::Open => ("Abierta", egui::Color32::GREEN),
+                                            RoomStatus::Full => ("Llena", egui::Color32::RED),
+                                            RoomStatus::Closed => ("Cerrada", egui::Color32::GRAY),
+                                        };
+                                        ui.colored_label(status_color, status_text);
+
+                                        // Jugadores
+                                        ui.label(format!(
+                                            "{}/{}",
+                                            room.current_players, room.max_players
+                                        ));
+                                    },
+                                );
+                            });
+
+                            // Info adicional
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("ID: {}", room.room_id))
+                                        .size(12.0)
+                                        .color(egui::Color32::GRAY),
+                                );
+                                if let Some(ref map) = room.map_name {
+                                    ui.label(
+                                        egui::RichText::new(format!("Mapa: {}", map))
+                                            .size(12.0)
+                                            .color(egui::Color32::GRAY),
+                                    );
+                                }
+                            });
+
+                            // Handle clicks
+                            if response.clicked() {
+                                selected_room.room_id = Some(room.room_id.clone());
+                            }
+
+                            if response.double_clicked() && !is_full {
+                                config.room = room.room_id.clone();
+                                println!("🎮 Entrando a sala: {}", room.room_id);
+                                next_state.set(AppState::Connecting);
+                            }
+                        });
+
+                        ui.add_space(5.0);
+                    }
+                });
+
+            ui.add_space(20.0);
+
+            // Botón de entrar (alternativa a doble click)
+            let can_join = selected_room.room_id.is_some()
+                && room_list.rooms.iter().any(|r| {
+                    Some(&r.room_id) == selected_room.room_id.as_ref()
+                        && !matches!(r.status, RoomStatus::Full)
+                });
+
+            if ui
+                .add_enabled(
+                    can_join,
+                    egui::Button::new(egui::RichText::new("Entrar a la Sala").size(18.0)),
+                )
+                .clicked()
+            {
+                if let Some(ref room_id) = selected_room.room_id {
+                    config.room = room_id.clone();
+                    println!("🎮 Entrando a sala: {}", room_id);
+                    next_state.set(AppState::Connecting);
+                }
+            }
+
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new("Doble click en una sala para entrar")
+                    .size(12.0)
+                    .color(egui::Color32::GRAY),
+            );
+        });
+    });
+}
+
 fn start_connection(
     mut commands: Commands,
     config: Res<ConnectionConfig>,
@@ -693,19 +1036,17 @@ fn check_connection(channels: Res<NetworkChannels>, mut next_state: ResMut<NextS
 // ============================================================================
 
 async fn start_webrtc_client(
-    signaling_url: String,
+    server_url: String,
     room: String,
     player_name: String,
     network_tx: mpsc::Sender<ServerMessage>,
     input_rx: mpsc::Receiver<PlayerInput>,
 ) {
-    println!(
-        "🔌 [Red] Conectando a matchbox en {}/{}",
-        signaling_url, room
-    );
+    // Conectar al proxy
+    let room_url = format!("{}/{}", server_url, room);
+    println!("🔌 [Red] Conectando a {}", room_url);
 
     // Crear WebRtcSocket y conectar a la room
-    let room_url = format!("{}/{}", signaling_url, room);
     let (mut socket, loop_fut) = WebRtcSocket::builder(room_url)
         .add_channel(matchbox_socket::ChannelConfig::reliable()) // Canal 0: Control
         .add_channel(matchbox_socket::ChannelConfig::unreliable()) // Canal 1: GameData

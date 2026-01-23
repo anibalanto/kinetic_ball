@@ -4,6 +4,7 @@ members = [
     "server",
     "client",
     "shared",
+    "proxy",
 ]
 
 [workspace.package]

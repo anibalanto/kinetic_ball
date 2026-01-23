@@ -29,3 +29,6 @@ clap = { workspace = true }
 # Configuración de keybindings
 ron = "0.8"
 dirs = "5.0"
+
+# HTTP client for fetching rooms
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
