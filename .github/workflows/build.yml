@@ -18,16 +18,16 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: client
+            artifact_name: kinetic_ball
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: client.exe
+            artifact_name: kinetic_ball.exe
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: client
+            artifact_name: kinetic_ball
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: client
+            artifact_name: kinetic_ball
 
     runs-on: ${{ matrix.os }}
 
@@ -51,20 +51,20 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Build client and server
-        run: cargo build -p client -p server --release --target ${{ matrix.target }}
+        run: cargo build -p kinetic_ball -p kinetic_ball_server --release --target ${{ matrix.target }}
 
       # PASO CLAVE: Renombrar binarios para evitar colisiones
       - name: Prepare artifacts
         shell: bash
         run: |
           mkdir -p out/
-          # Determinar extensión de servidor
-          SERVER_EXT=""
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then SERVER_EXT=".exe"; fi
+          # Determinar extensión
+          EXT=""
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then EXT=".exe"; fi
 
           # Copiar y renombrar binarios
-          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} out/client-${{ matrix.target }}${{ contains(matrix.os, 'windows') && '.exe' || '' }}
-          cp target/${{ matrix.target }}/release/server${SERVER_EXT} out/server-${{ matrix.target }}${SERVER_EXT}
+          cp target/${{ matrix.target }}/release/kinetic_ball${EXT} out/kinetic_ball-${{ matrix.target }}${EXT}
+          cp target/${{ matrix.target }}/release/kinetic_ball_server${EXT} out/kinetic_ball_server-${{ matrix.target }}${EXT}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

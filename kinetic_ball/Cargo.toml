@@ -1,18 +1,16 @@
 [package]
-name = "client"
+name = "kinetic_ball"
 version.workspace = true
 edition.workspace = true
 
 [[bin]]
-name = "client"
+name = "kinetic_ball"
 path = "src/main.rs"
 
 [dependencies]
-shared = { path = "../shared", features = ["bevy"] }
-
-# Bevy (con rendering completo)
+# Bevy (con rendering completo para cliente + física para host)
 bevy = { workspace = true }
-bevy_rapier2d = { workspace = true, features = ["debug-render-2d"] }
+bevy_rapier2d = { workspace = true, features = ["simd-stable"] }
 bevy_egui = "0.38"
 
 # Networking - Matchbox WebRTC
@@ -25,10 +23,13 @@ bytes = { workspace = true }
 # Utilidades
 anyhow = { workspace = true }
 clap = { workspace = true }
+rand = { workspace = true }
 
-# Configuración de keybindings
+# Configuración y serialización
 ron = "0.8"
 dirs = "5.0"
+json5 = "0.4"
+serde_json = "1.0"
 
-# HTTP client for fetching rooms
+# HTTP client para REST API (rooms)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

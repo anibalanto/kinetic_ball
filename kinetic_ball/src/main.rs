@@ -19,6 +19,9 @@ use keybindings::{
     SettingsUIState,
 };
 
+mod host;
+mod shared;
+
 // ============================================================================
 // ASSETS EMBEBIDOS EN EL BINARIO
 // ============================================================================
@@ -37,8 +40,8 @@ struct GameTick(u32);
 #[command(name = "Haxball Client")]
 #[command(about = "Cliente del juego Haxball", long_about = None)]
 struct Args {
-    /// URL del proxy. Ejemplo: ws://localhost:3537 o wss://proxy.ejemplo.com
-    #[arg(short, long, default_value = "ws://127.0.0.1:3537")]
+    /// Host del proxy (sin protocolo). Ejemplo: localhost:3537 o proxy.ejemplo.com
+    #[arg(short, long, default_value = "127.0.0.1:3537")]
     server: String,
 
     /// Nombre de la sala/room
@@ -60,6 +63,8 @@ enum AppState {
     Menu,
     Settings,
     RoomSelection,
+    CreateRoom,
+    HostingRoom,
     Connecting,
     InGame,
 }
@@ -103,13 +108,32 @@ struct SelectedRoom {
     room_id: Option<String>,
 }
 
+#[derive(Resource)]
+struct CreateRoomConfig {
+    room_name: String,
+    max_players: u8,
+    map_path: String,
+    scale: f32,
+}
+
+impl Default for CreateRoomConfig {
+    fn default() -> Self {
+        Self {
+            room_name: String::from("Mi Sala"),
+            max_players: 4,
+            map_path: String::new(),
+            scale: 1.0,
+        }
+    }
+}
+
 // ============================================================================
 // CONFIGURACIÓN DE CONEXIÓN (valores editables en el menú)
 // ============================================================================
 
 #[derive(Resource)]
 struct ConnectionConfig {
-    server_url: String,
+    server_host: String, // Host sin protocolo: localhost:3536 o api.example.com
     room: String,
     player_name: String,
 }
@@ -117,10 +141,20 @@ struct ConnectionConfig {
 impl ConnectionConfig {
     fn from_args(args: &Args) -> Self {
         Self {
-            server_url: args.server.clone(),
+            server_host: args.server.clone(),
             room: args.room.clone(),
             player_name: args.name.clone(),
         }
+    }
+
+    /// URL HTTP para llamadas REST API
+    fn http_url(&self) -> String {
+        format!("http://{}", self.server_host)
+    }
+
+    /// URL WebSocket para conexiones WS
+    fn ws_url(&self) -> String {
+        format!("ws://{}", self.server_host)
     }
 }
 
@@ -232,22 +266,24 @@ fn main() {
         .insert_resource(RoomList::default())
         .insert_resource(RoomFetchChannel::default())
         .insert_resource(SelectedRoom::default())
+        // Create room resources
+        .insert_resource(CreateRoomConfig::default())
         // Cargar assets embebidos al inicio (antes de todo)
         .add_systems(Startup, load_embedded_assets)
         // Sistemas de menú (solo en estado Menu)
-        .add_systems(OnEnter(AppState::Menu), setup_menu_camera)
+        .add_systems(OnEnter(AppState::Menu), setup_menu_camera_if_needed)
         .add_systems(
             EguiPrimaryContextPass,
             menu_ui.run_if(in_state(AppState::Menu)),
         )
         // Sistemas de configuración (solo en estado Settings)
-        .add_systems(OnEnter(AppState::Settings), setup_menu_camera)
+        .add_systems(OnEnter(AppState::Settings), setup_menu_camera_if_needed)
         .add_systems(
             EguiPrimaryContextPass,
             settings_ui.run_if(in_state(AppState::Settings)),
         )
         // Sistemas de selección de sala (solo en estado RoomSelection)
-        .add_systems(OnEnter(AppState::RoomSelection), (setup_menu_camera, fetch_rooms))
+        .add_systems(OnEnter(AppState::RoomSelection), (setup_menu_camera_if_needed, fetch_rooms))
         .add_systems(
             EguiPrimaryContextPass,
             room_selection_ui.run_if(in_state(AppState::RoomSelection)),
@@ -256,8 +292,20 @@ fn main() {
             Update,
             check_rooms_fetch.run_if(in_state(AppState::RoomSelection)),
         )
+        // Sistemas de crear sala (solo en estado CreateRoom)
+        .add_systems(OnEnter(AppState::CreateRoom), setup_menu_camera_if_needed)
+        .add_systems(
+            EguiPrimaryContextPass,
+            create_room_ui.run_if(in_state(AppState::CreateRoom)),
+        )
+        // Sistemas de hosting (solo en estado HostingRoom)
+        .add_systems(OnEnter(AppState::HostingRoom), (setup_menu_camera_if_needed, start_hosting))
+        .add_systems(
+            EguiPrimaryContextPass,
+            hosting_ui.run_if(in_state(AppState::HostingRoom)),
+        )
         // Sistema de conexión (solo en estado Connecting)
-        .add_systems(OnEnter(AppState::Connecting), start_connection)
+        .add_systems(OnEnter(AppState::Connecting), (cleanup_menu_camera, start_connection).chain())
         .add_systems(
             Update,
             check_connection.run_if(in_state(AppState::Connecting)),
@@ -420,8 +468,17 @@ struct MinimapFieldBackground;
 // SISTEMAS DE MENÚ
 // ============================================================================
 
-fn setup_menu_camera(mut commands: Commands) {
-    commands.spawn((Camera2d, MenuCamera));
+fn setup_menu_camera_if_needed(mut commands: Commands, menu_camera: Query<&MenuCamera>) {
+    // Solo crear cámara si no existe
+    if menu_camera.is_empty() {
+        commands.spawn((Camera2d, MenuCamera));
+    }
+}
+
+fn cleanup_menu_camera(mut commands: Commands, menu_camera: Query<Entity, With<MenuCamera>>) {
+    for entity in menu_camera.iter() {
+        commands.entity(entity).despawn();
+    }
 }
 
 /// Carga los assets embebidos en memoria al iniciar la aplicación
@@ -476,7 +533,7 @@ fn menu_ui(
                     ui.label("Servidor:");
                     ui.add_sized(
                         [300.0, 24.0],
-                        egui::TextEdit::singleline(&mut config.server_url),
+                        egui::TextEdit::singleline(&mut config.server_host),
                     );
                 });
                 ui.add_space(10.0);
@@ -503,8 +560,22 @@ fn menu_ui(
                     )
                     .clicked()
                 {
-                    println!("📋 Buscando salas en {}", config.server_url);
+                    println!("📋 Buscando salas en {}", config.server_host);
                     next_state.set(AppState::RoomSelection);
+                }
+
+                ui.add_space(20.0);
+
+                // Botón Crear Sala
+                if ui
+                    .add_sized(
+                        [150.0, 50.0],
+                        egui::Button::new(egui::RichText::new("Crear Sala").size(20.0)),
+                    )
+                    .clicked()
+                {
+                    println!("🏗️ Crear nueva sala");
+                    next_state.set(AppState::CreateRoom);
                 }
 
                 ui.add_space(20.0);
@@ -699,12 +770,7 @@ fn fetch_rooms(
     let (tx, rx) = mpsc::channel();
     fetch_channel.receiver = Some(Arc::new(Mutex::new(rx)));
 
-    // Convertir ws:// a http:// para la API REST
-    let api_url = config
-        .server_url
-        .replace("ws://", "http://")
-        .replace("wss://", "https://");
-    let url = format!("{}/api/rooms", api_url);
+    let url = format!("{}/api/rooms", config.http_url());
 
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -806,11 +872,7 @@ fn room_selection_ui(
                     room_list.loading = true;
                     room_list.error = None;
 
-                    let api_url = config
-                        .server_url
-                        .replace("ws://", "http://")
-                        .replace("wss://", "https://");
-                    let url = format!("{}/api/rooms", api_url);
+                    let url = format!("{}/api/rooms", config.http_url());
 
                     let (tx, rx) = mpsc::channel();
                     fetch_channel.receiver = Some(Arc::new(Mutex::new(rx)));
@@ -981,17 +1043,189 @@ fn room_selection_ui(
     });
 }
 
+fn create_room_ui(
+    mut contexts: EguiContexts,
+    mut config: ResMut<ConnectionConfig>,
+    mut create_config: ResMut<CreateRoomConfig>,
+    mut next_state: ResMut<NextState<AppState>>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    egui::CentralPanel::default().show(ctx, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.add_space(30.0);
+            ui.heading(egui::RichText::new("Crear Sala").size(36.0));
+            ui.add_space(20.0);
+
+            // Botón volver
+            if ui
+                .add_sized(
+                    [100.0, 30.0],
+                    egui::Button::new(egui::RichText::new("← Volver").size(16.0)),
+                )
+                .clicked()
+            {
+                next_state.set(AppState::Menu);
+            }
+
+            ui.add_space(30.0);
+
+            // Formulario
+            ui.group(|ui| {
+                ui.set_width(400.0);
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Nombre de la sala:");
+                    ui.add_sized(
+                        [250.0, 24.0],
+                        egui::TextEdit::singleline(&mut create_config.room_name),
+                    );
+                });
+
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Máximo de jugadores:");
+                    ui.add(egui::Slider::new(&mut create_config.max_players, 2..=16));
+                });
+
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Mapa (opcional):");
+                    ui.add_sized(
+                        [250.0, 24.0],
+                        egui::TextEdit::singleline(&mut create_config.map_path)
+                            .hint_text("Ruta al archivo .hbs"),
+                    );
+                });
+
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Escala del mapa:");
+                    ui.add(egui::Slider::new(&mut create_config.scale, 0.5..=2.0).step_by(0.1));
+                });
+
+                ui.add_space(10.0);
+            });
+
+            ui.add_space(30.0);
+
+            // Botón crear
+            if ui
+                .add_sized(
+                    [200.0, 50.0],
+                    egui::Button::new(egui::RichText::new("🏗️ Crear y Hostear").size(20.0)),
+                )
+                .clicked()
+            {
+                println!("🏗️ Creando sala: {}", create_config.room_name);
+                next_state.set(AppState::HostingRoom);
+            }
+        });
+    });
+}
+
+fn start_hosting(
+    config: Res<ConnectionConfig>,
+    create_config: Res<CreateRoomConfig>,
+) {
+    let server_host = config.server_host.clone();
+    let room_name = create_config.room_name.clone();
+    let max_players = create_config.max_players;
+    let map_path = if create_config.map_path.is_empty() {
+        None
+    } else {
+        Some(create_config.map_path.clone())
+    };
+    let scale = create_config.scale;
+
+    // Generar room_id único
+    let room_id = format!("room_{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs());
+
+    println!("🚀 Iniciando host...");
+    println!("   Sala: {}", room_name);
+    println!("   Room ID: {}", room_id);
+    println!("   Max jugadores: {}", max_players);
+
+    // Lanzar host en thread separado
+    std::thread::spawn(move || {
+        host::host(
+            map_path,
+            scale,
+            room_id,
+            server_host,
+            room_name,
+            max_players,
+        );
+    });
+}
+
+fn hosting_ui(
+    mut contexts: EguiContexts,
+    mut next_state: ResMut<NextState<AppState>>,
+    create_config: Res<CreateRoomConfig>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    egui::CentralPanel::default().show(ctx, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.add_space(100.0);
+            ui.heading(egui::RichText::new("🎮 Sala Activa").size(36.0));
+            ui.add_space(20.0);
+
+            ui.label(
+                egui::RichText::new(format!("Sala: {}", create_config.room_name))
+                    .size(24.0)
+            );
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new(format!("Jugadores máximos: {}", create_config.max_players))
+                    .size(18.0)
+                    .color(egui::Color32::GRAY)
+            );
+
+            ui.add_space(30.0);
+            ui.label(
+                egui::RichText::new("El servidor está corriendo en segundo plano.")
+                    .size(16.0)
+            );
+            ui.label(
+                egui::RichText::new("Los jugadores pueden unirse desde 'Ver Salas'.")
+                    .size(16.0)
+            );
+
+            ui.add_space(50.0);
+
+            if ui
+                .add_sized(
+                    [200.0, 50.0],
+                    egui::Button::new(egui::RichText::new("← Volver al Menú").size(20.0)),
+                )
+                .clicked()
+            {
+                next_state.set(AppState::Menu);
+            }
+
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new("Nota: El servidor seguirá activo aunque vuelvas al menú")
+                    .size(12.0)
+                    .color(egui::Color32::GRAY)
+            );
+        });
+    });
+}
+
 fn start_connection(
-    mut commands: Commands,
     config: Res<ConnectionConfig>,
     mut channels: ResMut<NetworkChannels>,
-    menu_camera: Query<Entity, With<MenuCamera>>,
 ) {
-    // Despawnear la cámara del menú
-    for entity in menu_camera.iter() {
-        commands.entity(entity).despawn();
-    }
-
     let (network_tx, network_rx) = mpsc::channel();
     let (input_tx, input_rx) = mpsc::channel();
 
@@ -999,7 +1233,7 @@ fn start_connection(
     channels.receiver = Some(Arc::new(Mutex::new(network_rx)));
     channels.sender = Some(input_tx);
 
-    let server_url = config.server_url.clone();
+    let ws_url = config.ws_url();
     let room = config.room.clone();
     let player_name = config.player_name.clone();
 
@@ -1012,7 +1246,7 @@ fn start_connection(
             .expect("Fallo al crear Runtime de Tokio");
 
         rt.block_on(async {
-            start_webrtc_client(server_url, room, player_name, network_tx, input_rx).await;
+            start_webrtc_client(ws_url, room, player_name, network_tx, input_rx).await;
         });
         println!("🌐 [Red] El hilo de red HA TERMINADO");
     });

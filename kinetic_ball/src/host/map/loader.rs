@@ -1,4 +1,4 @@
-use shared::map::Map;
+use crate::shared::map::Map;
 use std::path::{Path, PathBuf};
 use std::fs;
 

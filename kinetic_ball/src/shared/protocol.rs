@@ -1,4 +1,4 @@
-use crate::map::Map;
+use super::map::Map;
 use bevy::prelude::{Component, Vec2};
 use serde::{Deserialize, Serialize};
 
@@ -184,8 +184,7 @@ pub struct BallState {
 }
 
 /// Configuración completa del juego (del código original)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "bevy", derive(bevy::prelude::Resource))]
+#[derive(Debug, Clone, Serialize, Deserialize, bevy::prelude::Resource)]
 pub struct GameConfig {
     // Colores de equipo (RGB)
     pub team_colors: Vec<(f32, f32, f32)>,
