@@ -12,6 +12,8 @@ use shared::{GameConfig, TICK_RATE};
 use crate::input::GameAction;
 use crate::{Ball, GameInputManager, GameTick, Player, SlideCube, Sphere};
 
+use rand::Rng;
+
 /// Aplica el kick a la pelota con la curva y spin correspondientes
 /// Retorna la dirección final después de aplicar la curva
 pub fn apply_kick(
@@ -727,14 +729,14 @@ pub fn detect_slide(
                 base_dir
             } else if left_45 {
                 // Rotar 45° a la izquierda
-                let angle_45 = std::f32::consts::FRAC_PI_4;
+                let angle_45 = std::f32::consts::FRAC_PI_2;
                 Vec2::new(
                     base_dir.x * angle_45.cos() - base_dir.y * angle_45.sin(),
                     base_dir.x * angle_45.sin() + base_dir.y * angle_45.cos(),
                 )
             } else {
                 // Rotar 45° a la derecha
-                let angle_45 = -std::f32::consts::FRAC_PI_4;
+                let angle_45 = -std::f32::consts::FRAC_PI_2;
                 Vec2::new(
                     base_dir.x * angle_45.cos() - base_dir.y * angle_45.sin(),
                     base_dir.x * angle_45.sin() + base_dir.y * angle_45.cos(),
@@ -831,11 +833,16 @@ pub fn execute_slide(
                         if dist < hit_threshold {
                             // Aplicamos un impulso masivo en la dirección de la barrida
                             // Multiplicamos por un valor alto para que se note el impacto
-                            let slide_punch_force = 30000.0;
-                            ball_impulse.impulse = player.slide_direction * slide_punch_force;
+                            ball_impulse.impulse =
+                                player.slide_direction * config.slide_punch_force;
 
                             // Opcional: añadir un poco de "levantamiento" o efecto
-                            ball_impulse.torque_impulse = player.slide_direction.x * 500.0;
+
+                            // Generamos el valor aleatorio
+                            let mut rng = rand::thread_rng();
+                            let random_torque = rng.gen_range(0.0..config.slide_max_torque);
+
+                            ball_impulse.torque_impulse = player.slide_direction.x * random_torque;
                         }
                     }
                 }

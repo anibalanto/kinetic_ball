@@ -389,8 +389,8 @@ fn load_embedded_assets(
     let ball_handle = images.add(ball_image);
 
     // Cargar fuente emoji
-    let emoji_font = Font::try_from_bytes(EMOJI_FONT.to_vec())
-        .expect("Failed to load embedded emoji font");
+    let emoji_font =
+        Font::try_from_bytes(EMOJI_FONT.to_vec()).expect("Failed to load embedded emoji font");
     let emoji_font_handle = fonts.add(emoji_font);
 
     commands.insert_resource(EmbeddedAssets {
@@ -1475,13 +1475,12 @@ fn process_network_messages(
 
                         parent.spawn((
                             LeftText,
-                            Text2d::new("L"),
+                            Text2d::new("I"),
                             TextFont {
                                 font: embedded_assets.emoji_font.clone(),
                                 font_size: 30.0,
                                 ..default()
                             },
-
                             Transform {
                                 translation: Vec3::new(0.0, config.ball_radius * 4.0, 10.0),
                                 // Rotación hacia la derecha (negativa en el eje Z)
@@ -1492,7 +1491,7 @@ fn process_network_messages(
                         ));
                         parent.spawn((
                             RightText,
-                            Text2d::new("R"),
+                            Text2d::new("D"),
                             TextFont {
                                 font: embedded_assets.emoji_font.clone(),
                                 font_size: 30.0,

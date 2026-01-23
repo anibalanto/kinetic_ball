@@ -235,6 +235,8 @@ pub struct GameConfig {
 
     //Slide
     pub speed_slide_coefficient: f32,
+    pub slide_punch_force: f32,
+    pub slide_max_torque: f32,
 
     // Map loading
     #[serde(default)]
@@ -295,13 +297,15 @@ impl Default for GameConfig {
 
             //Dash time
             stamin: 1.0,
-            dash_stamin_cost: 0.15,
-            slide_stamin_cost: 0.25,
-            run_stamin_coeficient_cost: 0.15,
-            stamin_coeficient_restore: 0.07,
+            dash_stamin_cost: 0.02,
+            slide_stamin_cost: 0.02,
+            run_stamin_coeficient_cost: 0.02,
+            stamin_coeficient_restore: 0.08,
 
             //Slide
             speed_slide_coefficient: 2.0,
+            slide_punch_force: 300000.0,
+            slide_max_torque: 1000.0,
 
             // Map loading
             map_path: None,
