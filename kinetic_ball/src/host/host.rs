@@ -1,91 +1,40 @@
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
-use clap::Parser;
 use matchbox_socket::PeerId;
-use shared::*;
+use crate::shared::*;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-mod engine;
-mod input;
-mod map;
-mod network;
+use super::engine::*;
+use super::input::{GameAction, InputSource, NetworkInputSource};
+use super::network::*;
 
-use engine::*;
-use input::{GameAction, InputSource, NetworkInputSource};
-use network::*;
-
-/// HaxBall Server - Servidor de física para juego de fútbol
-#[derive(Parser, Debug)]
-#[command(name = "haxball-server")]
-#[command(about = "Servidor de física para HaxBall multiplayer", long_about = None)]
-struct Cli {
-    /// Ruta al archivo de mapa (.hbs, .json, .json5)
-    #[arg(short, long, value_name = "FILE")]
+pub fn host(
     map: Option<String>,
-
-    /// Factor de escala para el mapa (ej: 2.0 = mapa 2x más grande)
-    #[arg(short, long, default_value = "1.0")]
     scale: f32,
-
-    /// Listar mapas disponibles en el directorio maps/
-    #[arg(short, long)]
-    list_maps: bool,
-
-    /// Nombre de la sala/room
-    #[arg(short, long, default_value = "game_server")]
     room: String,
-
-    /// URL del proxy. Ejemplo: http://localhost:3537 o https://proxy.ejemplo.com
-    #[arg(long, default_value = "http://127.0.0.1:3537")]
-    proxy_url: String,
-
-    /// Nombre descriptivo de la sala
-    #[arg(long, default_value = "Game Room")]
+    server_host: String,
     room_name: String,
-
-    /// Número máximo de jugadores
-    #[arg(long, default_value = "8")]
     max_players: u8,
-}
-
-fn main() {
-    let cli = Cli::parse();
-
-    // Si se solicita listar mapas, mostrar y salir
-    if cli.list_maps {
-        println!("📂 Mapas disponibles en maps/:\n");
-        let maps = map::list_available_maps("maps");
-        if maps.is_empty() {
-            println!("   (No se encontraron mapas)");
-        } else {
-            for (i, map_path) in maps.iter().enumerate() {
-                let name = map_path.file_name().unwrap().to_string_lossy();
-                println!("   {}. {}", i + 1, name);
-            }
-        }
-        println!("\nUso: cargo run --release --bin server -- --map maps/<nombre>");
-        return;
-    }
-
-    println!("🎮 Haxball Server - Iniciando...");
+) {
+    println!("🎮 Haxball Host - Iniciando...");
 
     // Clone map path for later use in proxy registration
-    let map_name_for_proxy = cli.map.clone();
+    let map_name_for_proxy = map.clone();
 
     // Configurar GameConfig con el mapa desde CLI
-    let (game_config, loaded_map) = if let Some(map_path) = cli.map {
+    let (game_config, loaded_map) = if let Some(map_path) = map {
         println!("🗺️  Cargando mapa: {}", map_path);
 
         // Intentar cargar el mapa
-        let loaded_map = match map::load_map(&map_path) {
+        let loaded_map = match super::map::load_map(&map_path) {
             Ok(mut m) => {
                 println!("   ✅ Mapa cargado: {}", m.name);
 
                 // Aplicar escala si es diferente de 1.0
-                if (cli.scale - 1.0).abs() > 0.01 {
-                    println!("   📏 Aplicando escala: {}x", cli.scale);
-                    m.scale(cli.scale);
+                if (scale - 1.0).abs() > 0.01 {
+                    println!("   📏 Aplicando escala: {}x", scale);
+                    m.scale(scale);
                 }
 
                 Some(m)
@@ -109,7 +58,7 @@ fn main() {
         (GameConfig::default(), None)
     };
 
-    println!("🌐 Conectando al proxy en: {}", cli.proxy_url);
+    println!("🌐 Conectando al proxy en: {}", server_host);
 
     let (network_tx, network_rx) = mpsc::channel();
     let (outgoing_tx, outgoing_rx) = mpsc::channel();
@@ -122,10 +71,10 @@ fn main() {
     }));
 
     // Iniciar servidor WebRTC (se conecta al proxy)
-    let room = cli.room.clone();
-    let proxy_url = cli.proxy_url.clone();
-    let room_name = cli.room_name.clone();
-    let max_players = cli.max_players;
+    let room = room.clone();
+    let server_host = server_host.clone();
+    let room_name = room_name.clone();
+    let max_players = max_players;
     let map_name = map_name_for_proxy;
     std::thread::spawn(move || {
         start_webrtc_server(
@@ -133,7 +82,7 @@ fn main() {
             network_state,
             room,
             outgoing_rx,
-            proxy_url,
+            server_host,
             room_name,
             max_players,
             map_name,
@@ -203,7 +152,7 @@ pub struct GameTick(pub u32);
 pub struct BroadcastTimer(pub Timer);
 
 #[derive(Resource)]
-pub struct LoadedMap(pub Option<shared::map::Map>);
+pub struct LoadedMap(pub Option<crate::shared::map::Map>);
 
 /// GameInputManager - Igual interfaz que RustBall pero usando NetworkInputSource
 #[derive(Resource)]
@@ -294,7 +243,7 @@ pub struct Player {
     pub slide_cube_scale: f32,
 
     // Movimiento visual activo
-    pub active_movement: Option<shared::protocol::PlayerMovement>,
+    pub active_movement: Option<crate::shared::protocol::PlayerMovement>,
 
     // Team
     pub team_index: u8,
@@ -325,7 +274,7 @@ pub struct Ball {
 pub struct NetworkState {
     pub next_player_id: u32,
     pub game_config: GameConfig,
-    pub map: Option<shared::map::Map>,
+    pub map: Option<crate::shared::map::Map>,
 }
 
 pub enum NetworkEvent {
@@ -404,9 +353,9 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
 
     // Intentar cargar mapa
     let map_loaded = if let Some(map_path) = &config.map_path {
-        match map::load_map(map_path) {
+        match super::map::load_map(map_path) {
             Ok(haxball_map) => {
-                let converter = map::MapConverter::new();
+                let converter = super::map::MapConverter::new();
                 converter.spawn_map_geometry(&mut commands, &haxball_map);
                 true
             }

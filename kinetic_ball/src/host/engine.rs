@@ -5,12 +5,12 @@
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 use matchbox_socket::PeerId;
-use shared::movements::{get_movement, movement_ids};
-use shared::protocol::PlayerMovement;
-use shared::{GameConfig, TICK_RATE};
+use crate::shared::movements::{get_movement, movement_ids};
+use crate::shared::protocol::PlayerMovement;
+use crate::shared::{GameConfig, TICK_RATE};
 
-use crate::input::GameAction;
-use crate::{Ball, GameInputManager, GameTick, Player, SlideCube, Sphere};
+use super::input::GameAction;
+use super::host::{Ball, GameInputManager, GameTick, Player, SlideCube, Sphere};
 
 use rand::Rng;
 

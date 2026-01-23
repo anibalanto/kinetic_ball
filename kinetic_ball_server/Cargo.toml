@@ -1,11 +1,11 @@
 [package]
-name = "proxy"
+name = "kinetic_ball_server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "proxy"
+name = "kinetic_ball_server"
 path = "src/main.rs"
 
 [dependencies]

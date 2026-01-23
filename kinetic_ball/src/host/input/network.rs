@@ -1,7 +1,7 @@
 /// NetworkInputSource - Implementación de InputSource para jugadores conectados por red
 /// Almacena el input actual y anterior para detectar just_pressed/just_released
 use super::core::{GameAction, InputSource};
-use shared::protocol::PlayerInput;
+use crate::shared::protocol::PlayerInput;
 
 pub struct NetworkInputSource {
     current: PlayerInput,

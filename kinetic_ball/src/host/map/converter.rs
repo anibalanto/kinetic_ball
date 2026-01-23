@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
-use shared::map::{CurveConfig, Map, Segment, Vertex};
+use crate::shared::map::{CurveConfig, Map, Segment, Vertex};
 
 pub struct MapConverter {
     curve_config: CurveConfig,

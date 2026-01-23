@@ -1,12 +1,12 @@
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 use matchbox_socket::{PeerId, PeerState, WebRtcSocket};
-use shared::*;
+use crate::shared::*;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use crate::engine::spawn_physics;
-use crate::{
+use super::engine::spawn_physics;
+use super::host::{
     Ball, BroadcastTimer, GameInputManager, GameTick, LoadedMap, NetworkEvent, NetworkReceiver,
     NetworkSender, NetworkState, OutgoingMessage, Player, Sphere,
 };
@@ -20,7 +20,7 @@ pub fn start_webrtc_server(
     state: Arc<Mutex<NetworkState>>,
     room: String,
     outgoing_rx: mpsc::Receiver<OutgoingMessage>,
-    proxy_url: String,
+    server_host: String,
     room_name: String,
     max_players: u8,
     map_name: Option<String>,
@@ -32,16 +32,16 @@ pub fn start_webrtc_server(
 
     rt.block_on(async {
         // Registrar la room en el proxy y obtener token
-        let room_url = match register_room_with_proxy(&proxy_url, &room, &room_name, max_players, map_name.as_deref()).await {
+        let http_url = format!("http://{}", server_host);
+        let room_url = match register_room_with_proxy(&http_url, &room, &room_name, max_players, map_name.as_deref()).await {
             Ok(token) => {
                 println!("✅ Room '{}' registrada en proxy", room);
-                // Convertir HTTP URL a WS URL y conectar con token
-                let ws_proxy = proxy_url.replace("http://", "ws://").replace("https://", "wss://");
-                format!("{}/connect?token={}", ws_proxy, token)
+                let ws_url = format!("ws://{}", server_host);
+                format!("{}/connect?token={}", ws_url, token)
             }
             Err(e) => {
                 eprintln!("❌ Error registrando room en proxy: {}", e);
-                eprintln!("   Asegúrate de que el proxy está corriendo en {}", proxy_url);
+                eprintln!("   Asegúrate de que el proxy está corriendo");
                 return;
             }
         };
@@ -412,14 +412,14 @@ struct CreateRoomResponse {
 }
 
 async fn register_room_with_proxy(
-    proxy_url: &str,
+    http_url: &str,
     room_id: &str,
     room_name: &str,
     max_players: u8,
     map_name: Option<&str>,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
-    let url = format!("{}/api/rooms", proxy_url);
+    let url = format!("{}/api/rooms", http_url);
 
     let request = CreateRoomRequest {
         room_id: room_id.to_string(),
@@ -428,7 +428,7 @@ async fn register_room_with_proxy(
         map_name: map_name.map(|s| s.to_string()),
     };
 
-    println!("📡 Registering room '{}' with proxy at {}", room_id, proxy_url);
+    println!("📡 Registering room '{}' with proxy at {}", room_id, http_url);
 
     let response = client
         .post(&url)
