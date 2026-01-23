@@ -1873,9 +1873,18 @@ fn process_network_messages(
             }
             if !found && !spawned_this_frame.contains(&ps.id) {
                 spawned_this_frame.insert(ps.id);
+
+                // Determinar si es el jugador local
+                let is_local = my_id.0 == Some(ps.id);
+                let player_layers = if is_local {
+                    RenderLayers::from_layers(&[0, 2]) // Visible en cámara principal y detalle
+                } else {
+                    RenderLayers::layer(0) // Solo visible en cámara principal
+                };
+
                 println!(
-                    "🆕 [Bevy] Spawneando jugador visual: {} (ID: {})",
-                    ps.name, ps.id
+                    "🆕 [Bevy] Spawneando jugador visual: {} (ID: {}) {}",
+                    ps.name, ps.id, if is_local { "(LOCAL)" } else { "" }
                 );
 
                 // Colores de equipo desde la configuración
@@ -1906,7 +1915,7 @@ fn process_network_messages(
                             target_rotation: ps.rotation,
                             smoothing: 15.0,
                         },
-                        RenderLayers::from_layers(&[0, 2]),
+                        player_layers.clone(),
                     ))
                     .with_children(|parent| {
                         let radius = config.sphere_radius;
@@ -1918,7 +1927,7 @@ fn process_network_messages(
                             MeshMaterial2d(materials.add(Color::BLACK)),
                             Transform::from_xyz(0.0, 0.0, 0.5),
                             PlayerOutline,
-                            RenderLayers::from_layers(&[0, 2]),
+                            player_layers.clone(),
                         ));
 
                         // Círculo principal (relleno) - color del jugador
@@ -1927,7 +1936,7 @@ fn process_network_messages(
                             MeshMaterial2d(materials.add(player_color)),
                             Transform::from_xyz(0.0, 0.0, 1.0),
                             PlayerSprite { parent_id: ps.id },
-                            RenderLayers::from_layers(&[0, 2]),
+                            player_layers.clone(),
                         ));
 
                         // Indicador de dirección (cubo pequeño hacia adelante)
@@ -1961,7 +1970,7 @@ fn process_network_messages(
                                 .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4))
                                 .with_scale(Vec3::splat(cube_scale)),
                             SlideCubeVisual { parent_id: ps.id },
-                            RenderLayers::from_layers(&[0, 2]),
+                            player_layers.clone(),
                         ));
 
                         // Barra de carga de patada
@@ -1974,7 +1983,7 @@ fn process_network_messages(
                             },
                             Anchor::CENTER_LEFT,
                             Transform::from_xyz(0.0, 0.0, 30.0),
-                            RenderLayers::from_layers(&[0, 2]),
+                            player_layers.clone(),
                         ));
 
                         let angle = 25.0f32.to_radians();
@@ -1994,7 +2003,7 @@ fn process_network_messages(
                                 rotation: Quat::from_rotation_z(angle),
                                 ..default()
                             },
-                            RenderLayers::from_layers(&[0, 2]),
+                            player_layers.clone(),
                         ));
 
                         // Barra de carga de patada a la derecha
@@ -2012,28 +2021,29 @@ fn process_network_messages(
                                 rotation: Quat::from_rotation_z(-angle),
                                 ..default()
                             },
-                            RenderLayers::from_layers(&[0, 2]),
+                            player_layers.clone(),
                         ));
 
                         let angle_90 = 90.0f32.to_radians();
 
-                        // Barra de carga de estamina
-                        parent.spawn((
-                            StaminChargeBar,
-                            Sprite {
-                                color: opposite_color,
-                                custom_size: Some(Vec2::new(0.0, 5.0)),
-                                ..default()
-                            },
-                            Anchor::CENTER_LEFT,
-                            Transform {
-                                translation: Vec3::new(-10.0, -15.0, 30.0),
-                                // Rotación hacia la derecha (negativa en el eje Z)
-                                rotation: Quat::from_rotation_z(angle_90),
-                                ..default()
-                            },
-                            RenderLayers::layer(2),
-                        ));
+                        // Solo para jugador local: barra de estamina
+                        if is_local {
+                            parent.spawn((
+                                StaminChargeBar,
+                                Sprite {
+                                    color: opposite_color,
+                                    custom_size: Some(Vec2::new(0.0, 5.0)),
+                                    ..default()
+                                },
+                                Anchor::CENTER_LEFT,
+                                Transform {
+                                    translation: Vec3::new(-10.0, -15.0, 30.0),
+                                    rotation: Quat::from_rotation_z(angle_90),
+                                    ..default()
+                                },
+                                RenderLayers::layer(2),
+                            ));
+                        }
 
                         // Nombre del jugador debajo del sprite
                         parent.spawn((
@@ -2048,38 +2058,39 @@ fn process_network_messages(
                             RenderLayers::layer(0),
                         ));
 
-                        parent.spawn((
-                            LeftText,
-                            Text2d::new("I"),
-                            TextFont {
-                                font: embedded_assets.emoji_font.clone(),
-                                font_size: 30.0,
-                                ..default()
-                            },
-                            Transform {
-                                translation: Vec3::new(0.0, config.ball_radius * 4.0, 10.0),
-                                // Rotación hacia la derecha (negativa en el eje Z)
-                                rotation: Quat::from_rotation_z(angle_90),
-                                ..default()
-                            },
-                            RenderLayers::layer(2), // Solo visible en cámara de detalle
-                        ));
-                        parent.spawn((
-                            RightText,
-                            Text2d::new("D"),
-                            TextFont {
-                                font: embedded_assets.emoji_font.clone(),
-                                font_size: 30.0,
-                                ..default()
-                            },
-                            Transform {
-                                translation: Vec3::new(0.0, -config.ball_radius * 4.0, 10.0),
-                                // Rotación hacia la derecha (negativa en el eje Z)
-                                rotation: Quat::from_rotation_z(angle_90),
-                                ..default()
-                            },
-                            RenderLayers::layer(2), // Solo visible en cámara de detalle
-                        ));
+                        // Solo para jugador local: indicadores de curva
+                        if is_local {
+                            parent.spawn((
+                                LeftText,
+                                Text2d::new("I"),
+                                TextFont {
+                                    font: embedded_assets.emoji_font.clone(),
+                                    font_size: 30.0,
+                                    ..default()
+                                },
+                                Transform {
+                                    translation: Vec3::new(0.0, config.ball_radius * 4.0, 10.0),
+                                    rotation: Quat::from_rotation_z(angle_90),
+                                    ..default()
+                                },
+                                RenderLayers::layer(2),
+                            ));
+                            parent.spawn((
+                                RightText,
+                                Text2d::new("D"),
+                                TextFont {
+                                    font: embedded_assets.emoji_font.clone(),
+                                    font_size: 30.0,
+                                    ..default()
+                                },
+                                Transform {
+                                    translation: Vec3::new(0.0, -config.ball_radius * 4.0, 10.0),
+                                    rotation: Quat::from_rotation_z(angle_90),
+                                    ..default()
+                                },
+                                RenderLayers::layer(2),
+                            ));
+                        }
                     });
             }
         }
