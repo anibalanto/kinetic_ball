@@ -147,14 +147,29 @@ impl ConnectionConfig {
         }
     }
 
-    /// URL HTTP para llamadas REST API
-    fn http_url(&self) -> String {
-        format!("http://{}", self.server_host)
+    /// Determina si debe usar conexión segura (HTTPS/WSS)
+    fn is_secure(&self) -> bool {
+        let host = &self.server_host;
+        // Usar conexión segura si:
+        // - Es un dominio de ngrok
+        // - No es localhost/127.0.0.1 y no tiene puerto explícito
+        host.contains(".ngrok") ||
+        host.contains(".ngrok-free.app") ||
+        (!host.starts_with("localhost") &&
+         !host.starts_with("127.0.0.1") &&
+         !host.contains(':'))
     }
 
-    /// URL WebSocket para conexiones WS
+    /// URL HTTP/HTTPS para llamadas REST API
+    fn http_url(&self) -> String {
+        let protocol = if self.is_secure() { "https" } else { "http" };
+        format!("{}://{}", protocol, self.server_host)
+    }
+
+    /// URL WebSocket WS/WSS para conexiones WS
     fn ws_url(&self) -> String {
-        format!("ws://{}", self.server_host)
+        let protocol = if self.is_secure() { "wss" } else { "ws" };
+        format!("{}://{}", protocol, self.server_host)
     }
 }
 
@@ -532,18 +547,40 @@ fn menu_ui(
                 ui.horizontal(|ui| {
                     ui.label("Servidor:");
                     ui.add_sized(
-                        [300.0, 24.0],
+                        [270.0, 24.0],
                         egui::TextEdit::singleline(&mut config.server_host),
                     );
+                    if ui.button("📋").on_hover_text("Pegar").clicked() {
+                        match arboard::Clipboard::new() {
+                            Ok(mut clipboard) => {
+                                match clipboard.get_text() {
+                                    Ok(text) => {
+                                        let trimmed = text.trim().to_string();
+                                        println!("📋 Pegando servidor: {}", trimmed);
+                                        config.server_host = trimmed;
+                                    }
+                                    Err(e) => println!("❌ Error obteniendo texto: {:?}", e),
+                                }
+                            }
+                            Err(e) => println!("❌ Error creando clipboard: {:?}", e),
+                        }
+                    }
                 });
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
                     ui.label("Nombre:");
                     ui.add_sized(
-                        [300.0, 24.0],
+                        [270.0, 24.0],
                         egui::TextEdit::singleline(&mut config.player_name),
                     );
+                    if ui.button("📋").on_hover_text("Pegar").clicked() {
+                        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                            if let Ok(text) = clipboard.get_text() {
+                                config.player_name = text.trim().to_string();
+                            }
+                        }
+                    }
                 });
             });
 
@@ -771,6 +808,7 @@ fn fetch_rooms(
     fetch_channel.receiver = Some(Arc::new(Mutex::new(rx)));
 
     let url = format!("{}/api/rooms", config.http_url());
+    println!("🌐 Fetching rooms from: {}", url);
 
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -780,15 +818,22 @@ fn fetch_rooms(
 
         let result = rt.block_on(async {
             let client = reqwest::Client::new();
-            match client.get(&url).send().await {
+            match client
+                .get(&url)
+                .header("ngrok-skip-browser-warning", "true")
+                .send()
+                .await
+            {
                 Ok(response) => {
-                    if response.status().is_success() {
+                    let status = response.status();
+                    if status.is_success() {
                         match response.json::<Vec<RoomInfo>>().await {
                             Ok(rooms) => Ok(rooms),
                             Err(e) => Err(format!("Error parsing response: {}", e)),
                         }
                     } else {
-                        Err(format!("Server error: {}", response.status()))
+                        let body = response.text().await.unwrap_or_default();
+                        Err(format!("Server error: {} - Body: {}", status, body))
                     }
                 }
                 Err(e) => Err(format!("Connection error: {}", e)),
@@ -885,7 +930,12 @@ fn room_selection_ui(
 
                         let result = rt.block_on(async {
                             let client = reqwest::Client::new();
-                            match client.get(&url).send().await {
+                            match client
+                                .get(&url)
+                                .header("ngrok-skip-browser-warning", "true")
+                                .send()
+                                .await
+                            {
                                 Ok(response) => {
                                     if response.status().is_success() {
                                         match response.json::<Vec<RoomInfo>>().await {

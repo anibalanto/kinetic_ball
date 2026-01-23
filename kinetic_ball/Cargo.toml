@@ -33,3 +33,6 @@ serde_json = "1.0"
 
 # HTTP client para REST API (rooms)
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Clipboard access (wayland-data-control para soporte Wayland nativo)
+arboard = { version = "3.4", features = ["wayland-data-control"] }
