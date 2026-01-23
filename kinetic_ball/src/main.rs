@@ -245,6 +245,12 @@ fn get_team_colors(team_index: u8, team_colors: &[(f32, f32, f32)]) -> (Color, C
 }
 
 fn main() {
+    // Inicializar el CryptoProvider de rustls antes de cualquier uso de TLS
+    // Necesario en Mac donde no se puede autodetectar
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     let args = Args::parse();
     println!("🎮 Haxball Client - Iniciando...");
 
