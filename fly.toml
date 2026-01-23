@@ -1,0 +1,16 @@
+app = "kinetic-ball"
+primary_region = "mia"
+
+[build]
+
+[http_service]
+  internal_port = 3537
+  force_https = true
+  auto_start_machines = true
+  auto_stop_machines = false
+  min_machines_running = 1
+
+[vm]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1

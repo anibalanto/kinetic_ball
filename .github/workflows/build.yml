@@ -53,6 +53,10 @@ jobs:
       - name: Build client and server
         run: cargo build -p kinetic_ball -p kinetic_ball_server --release --target ${{ matrix.target }}
 
+      - name: Install matchbox_server
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(github.ref, 'refs/tags/v')
+        run: cargo install matchbox_server
+
       # PASO CLAVE: Renombrar binarios para evitar colisiones
       - name: Prepare artifacts
         shell: bash
@@ -65,6 +69,11 @@ jobs:
           # Copiar y renombrar binarios
           cp target/${{ matrix.target }}/release/kinetic_ball${EXT} out/kinetic_ball-${{ matrix.target }}${EXT}
           cp target/${{ matrix.target }}/release/kinetic_ball_server${EXT} out/kinetic_ball_server-${{ matrix.target }}${EXT}
+
+          # Copiar matchbox_server solo para Linux en tags
+          if [[ "${{ matrix.target }}" == "x86_64-unknown-linux-gnu" && "${{ github.ref }}" == refs/tags/v* ]]; then
+            cp ~/.cargo/bin/matchbox_server out/
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -91,3 +100,30 @@ jobs:
         with:
           files: all_artifacts/*
           generate_release_notes: true
+
+  deploy-fly:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: binarios-x86_64-unknown-linux-gnu
+          path: ./
+
+      - name: Prepare binaries
+        run: |
+          mv kinetic_ball_server-x86_64-unknown-linux-gnu kinetic_ball_server
+          chmod +x kinetic_ball_server matchbox_server
+
+      - name: Setup Fly.io
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
