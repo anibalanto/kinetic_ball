@@ -16,6 +16,7 @@ Inspired by seeing how much could be done with just an X in HaxBall, written in 
 - Authoritative server with Rapier2D physics
 - Graphical client with Bevy 0.17
 - WebRTC peer-to-peer networking via matchbox_socket
+- Room/lobby system with proxy server for room management
 - Custom map support (HaxBall format `.hbs`, `.json`, `.json5`) (Work In Progress)
 - Configurable keybindings (saved in `~/.config/rustball/keybindings.ron`)
 - Minimap and player detail camera
@@ -34,12 +35,13 @@ cargo install matchbox_server
 ## Building
 
 ```bash
-# Build everything (server + client + shared)
+# Build everything (server + client + proxy + shared)
 cargo build --release
 
 # Or build separately
 cargo build --release -p server
 cargo build --release -p client
+cargo build --release -p proxy
 ```
 
 ## How to Play
@@ -52,56 +54,98 @@ cargo build --release -p client
    ```
    This starts the signaling server at `ws://127.0.0.1:3536`
 
-2. **Start the game server:**
+2. **Start the proxy server:**
    ```bash
-   cargo run --release -p server
+   cargo run --release -p proxy -- --port 3537 --matchbox-url ws://127.0.0.1:3536
+   ```
+   The proxy manages room registration and provides a lobby system.
+
+3. **Start the game server:**
+   ```bash
+   cargo run --release -p server -- --room my_room --room-name "My Game Room"
    ```
    Useful options:
    ```bash
    # With a custom map
-   cargo run --release -p server -- --map maps/futsal_fah.hbs
+   cargo run --release -p server -- --room my_room --map maps/futsal_fah.hbs
 
    # List available maps
    cargo run --release -p server -- --list-maps
 
    # Scale the map
-   cargo run --release -p server -- --map maps/cancha_grande.json5 --scale 1.5
+   cargo run --release -p server -- --room my_room --map maps/cancha_grande.json5 --scale 1.5
+
+   # Set max players
+   cargo run --release -p server -- --room my_room --max-players 6
    ```
 
-3. **Start the client:**
+4. **Start the client:**
    ```bash
-   cargo run --release -p client -- --name YourName
+   cargo run --release -p client
    ```
+   The client will show a menu where you can:
+   - Click "Ver Salas" to see available rooms
+   - Double-click a room to join
+   - Configure keybindings in "Teclas"
+
+### Architecture
+
+```mermaid
+flowchart LR
+    subgraph Signaling
+        P[Proxy<br/>REST + WS]
+        M[Matchbox<br/>Signaling]
+    end
+
+    C[Client<br/>Bevy UI]
+    S[Server<br/>Physics]
+
+    C -->|1. GET /api/rooms| P
+    S -->|2. POST /api/rooms| P
+    C -->|3. WS /:room_id| P
+    S -->|4. WS /connect?token| P
+    P -->|WS proxy| M
+    C <-.->|5. WebRTC direct| S
+```
+
+- **Matchbox Server**: WebRTC signaling for peer-to-peer connections
+- **Proxy**: Room management, REST API for listing rooms, WebSocket proxy
+- **Server**: Authoritative physics simulation, registers rooms with proxy
+- **Client**: Graphical interface, fetches room list from proxy
 
 ### Online Play with ngrok
 
-To play with friends over the internet, you need to expose the signaling server using [ngrok](https://ngrok.com/):
+To play with friends over the internet, expose the proxy using [ngrok](https://ngrok.com/):
 
 1. **Start matchbox_server:**
    ```bash
    matchbox_server
    ```
 
-2. **Expose with ngrok (in another terminal):**
+2. **Start the proxy:**
    ```bash
-   ngrok http 3536
+   cargo run --release -p proxy -- --port 3537 --matchbox-url ws://127.0.0.1:3536
    ```
-   ngrok will give you a URL like `https://xxxxxxxxxxxx.ngrok-free.app`
 
-3. **Start the game server pointing to ngrok:**
+3. **Expose proxy with ngrok:**
+   ```bash
+   ngrok http 3537
+   ```
+   ngrok will give you a URL like `https://xxxx.ngrok-free.app`
+
+4. **Start the game server pointing to ngrok:**
    ```bash
    cargo run --release -p server -- \
-     --signaling-url wss://xxxxxxxxxxxx.ngrok-free.app \
-     --room my_room
+     --proxy-url https://xxxx.ngrok-free.app \
+     --room my_room \
+     --room-name "My Online Game"
    ```
 
-4. **Clients connect using the same URL:**
+5. **Clients connect using the ngrok URL:**
    ```bash
-   cargo run --release -p client -- \
-     --server wss://xxxxxxxxxxxx.ngrok-free.app \
-     --room my_room \
-     --name Player1
+   cargo run --release -p client -- --server wss://xxxx.ngrok-free.app
    ```
+   Or simply change the "Servidor" field in the menu to `wss://xxxx.ngrok-free.app`
 
 **Note:** The host running the server can also connect as a client.
 
@@ -142,18 +186,24 @@ Keybindings can be reconfigured from the "Keys" menu in the client.
 ## Project Structure
 
 ```
-RustBall/
+kinetic_ball/
 ├── client/          # Bevy graphical client
 │   └── src/
 │       ├── main.rs
 │       └── keybindings.rs
-├── server/          # Authoritative server
+├── server/          # Authoritative physics server
 │   └── src/
 │       ├── main.rs
 │       ├── engine.rs    # Physics and game logic
-│       ├── network.rs   # WebRTC/Matchbox
+│       ├── network.rs   # WebRTC/Matchbox + proxy registration
 │       ├── map/         # Map loading
 │       └── input/       # Input handling
+├── proxy/           # Room management proxy
+│   └── src/
+│       ├── main.rs      # CLI + axum server
+│       ├── state.rs     # Room state management
+│       ├── api/         # REST API (rooms CRUD)
+│       └── ws/          # WebSocket proxy to matchbox
 ├── shared/          # Shared code
 │   └── src/
 │       ├── lib.rs
@@ -183,11 +233,11 @@ This project is under active development. Some ideas for contribution:
 - In-game chat
 - Replay/match recording
 - WebAssembly compilation for browser play
-- Room/lobby system
 - Power-ups and alternative game modes
 - Netcode improvements (client-side prediction, reconciliation)
 - Support for more map formats
 - Integrated map editor
+- Auto TLS with Let's Encrypt for proxy (rustls-acme support included)
 
 ## Contributing
 
