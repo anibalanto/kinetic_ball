@@ -92,22 +92,30 @@ When creating a room, you can configure:
 ```mermaid
 flowchart LR
     subgraph Cloud
-        KBS[kinetic_ball_server<br/>Proxy + Matchbox]
+        KBS[kinetic_ball_server <br/> API REST + WS Proxy]
+        MB[Matchbox]
     end
 
-    subgraph "Desktop (Host)"
-        H[kinetic_ball<br/>Physics + UI]
+    subgraph "kinetic_ball (App Host & Play)"
+        C1[Play <br/> UI - Input]
+        H[Host <br/> Physics + GameState]
+    end
+    
+    subgraph "kinetic_ball (Play)"
+        C2[Play <br/> UI - Input]
     end
 
-    subgraph "Desktop (Client)"
-        C[kinetic_ball<br/>UI only]
-    end
-
-    H -->|1. POST /api/rooms| KBS
-    H -->|2. WS /connect| KBS
-    C -->|3. GET /api/rooms| KBS
-    C -->|4. WS /:room_id| KBS
-    H <-.->|5. WebRTC P2P| C
+    H -->|1. POST /api/rooms room_id, etc. response token| KBS
+    H -->|2. WSS /connect token| KBS
+    KBS -.-|3. WS room_id| MB
+    C1 -->|4. GET /api/rooms . response room_ids| KBS
+    C1 -.-|5. WSS /connect room_id| KBS
+    KBS -.-|6. WS room_id| MB
+    H <-.->|7. WebRTC P2P| C1
+    C2 -->|8. GET /api/rooms . response room_ids| KBS
+    C2 -.-|9. WSS /connect room_id| KBS
+    KBS -.-|10. WS room_id| MB
+    H <-.->|11. WebRTC P2P| C2
 ```
 
 - **kinetic_ball_server**: Unified cloud server (REST API + WebSocket proxy + Matchbox signaling)
