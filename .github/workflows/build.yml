@@ -132,7 +132,10 @@ jobs:
       - name: Setup Fly.io
         uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: List files before deploy
+        run: ls -la
+
       - name: Deploy to Fly.io
-        run: flyctl deploy --local-only
+        run: flyctl deploy --local-only --no-cache
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

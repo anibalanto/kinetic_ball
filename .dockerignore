@@ -1,0 +1,8 @@
+# Ignorar todo excepto lo necesario
+*
+
+# Incluir solo los binarios
+!kinetic_ball_server
+!matchbox_server
+!Dockerfile
+!fly.toml
