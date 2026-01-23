@@ -1,5 +1,5 @@
 app = "kinetic-ball"
-primary_region = "mia"
+primary_region = "gru"
 
 [build]
 
