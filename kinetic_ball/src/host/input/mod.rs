@@ -1,5 +1,5 @@
 // Módulo de abstracción de input para el servidor
-// Usa la misma interfaz que RustBall pero con NetworkInputSource
+// con NetworkInputSource
 
 pub mod core;
 pub mod network;

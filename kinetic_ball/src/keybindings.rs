@@ -329,7 +329,7 @@ impl SettingsUIState {
 // ============================================
 
 pub fn get_config_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("rustball"))
+    dirs::config_dir().map(|p| p.join("kinetic_ball"))
 }
 
 pub fn get_keybindings_path() -> Option<PathBuf> {

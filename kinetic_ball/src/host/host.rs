@@ -171,7 +171,7 @@ pub struct BroadcastTimer(pub Timer);
 #[derive(Resource)]
 pub struct LoadedMap(pub Option<crate::shared::map::Map>);
 
-/// GameInputManager - Igual interfaz que RustBall pero usando NetworkInputSource
+/// GameInputManager usando NetworkInputSource
 #[derive(Resource)]
 pub struct GameInputManager {
     sources: std::collections::HashMap<u32, NetworkInputSource>,
@@ -232,10 +232,10 @@ impl Default for GameInputManager {
     }
 }
 
-// Estructura igual a RustBall - Player referencia a Sphere
+// Estructura del Player referencia a Sphere
 #[derive(Component)]
 pub struct Player {
-    pub sphere: Entity,     // Referencia a la entidad física (igual que RustBall)
+    pub sphere: Entity,     // Referencia a la entidad física
     pub slide_cube: Entity, // Referencia al cubo de dirección/slide
     pub id: u32,
     pub name: String,
@@ -269,7 +269,7 @@ pub struct Player {
     pub mode_active: bool,
 }
 
-// Marker component para la entidad física del jugador (igual que RustBall)
+// Marker component para la entidad física del jugador
 #[derive(Component)]
 pub struct Sphere;
 

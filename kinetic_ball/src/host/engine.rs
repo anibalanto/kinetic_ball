@@ -53,7 +53,7 @@ pub fn spawn_physics(
     peer_id: PeerId,
     config: &Res<GameConfig>,
 ) {
-    // Spawn física del jugador (Sphere) - igual estructura que RustBall
+    // Spawn física del jugador (Sphere)
     let spawn_x = ((id % 3) as f32 - 1.0) * 200.0;
     let spawn_y = ((id / 3) as f32 - 1.0) * 200.0;
 
@@ -148,7 +148,7 @@ pub fn move_players(
         if let Ok(mut velocity) = sphere_query.get_mut(sphere_entity) {
             let mut movement = Vec2::ZERO;
 
-            // Movimiento usando GameInputManager (igual que RustBall)
+            // Movimiento usando GameInputManager
             if game_input.is_pressed(player_id, GameAction::MoveUp) {
                 movement.y += 1.0;
             }
@@ -185,7 +185,7 @@ pub fn move_players(
     }
 }
 
-// Sistema de RustBall - permite atravesar la pelota con Sprint
+// Permite atravesar la pelota con Sprint
 pub fn handle_collision_player(
     game_input: Res<GameInputManager>,
     mut player_query: Query<&mut Player>,
@@ -325,11 +325,11 @@ pub fn apply_magnus_effect(
             let velocity_dir = velocity.linvel.normalize_or_zero();
             let side_vector = Vec2::new(-velocity_dir.y, velocity_dir.x);
 
-            // Igual que RustBall: multiplicar por velocidad
+            // Multiplicar por velocidad
             let magnus_force_mag = config.magnus_coefficient * ball.angular_velocity * speed;
             force.force = side_vector * magnus_force_mag;
 
-            // Decaimiento del spin por fricción del aire (igual que RustBall)
+            // Decaimiento del spin por fricción del aire
             ball.angular_velocity *= 0.98;
         } else {
             force.force = Vec2::ZERO;

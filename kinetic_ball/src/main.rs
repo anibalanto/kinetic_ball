@@ -262,7 +262,7 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.1, 0.1, 0.15)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "RustBall".to_string(),
+                title: "🐐⚽ kinetic-ball ⚽🐐".to_string(),
                 resolution: (1280u32, 720u32).into(),
                 ..default()
             }),
@@ -539,7 +539,7 @@ fn menu_ui(
         ui.vertical_centered(|ui| {
             ui.add_space(100.0);
 
-            ui.heading(egui::RichText::new("RustBall").size(48.0));
+            ui.heading(egui::RichText::new("🐐⚽ kinetic-ball ⚽🐐").size(48.0));
             ui.add_space(40.0);
 
             // Contenedor para los campos
@@ -1673,10 +1673,10 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
             ));
         });
 
-    // El Campo de Juego (Césped) - Color verde de RustBall - Layer 0
+    // El Campo de Juego (Césped) - Color verde - Layer 0
     commands.spawn((
         Sprite {
-            color: Color::srgb(0.2, 0.5, 0.2), // RGB(51, 127, 51) - Verde RustBall
+            color: Color::srgb(0.2, 0.5, 0.2),
             custom_size: Some(Vec2::new(config.arena_width, config.arena_height)),
             ..default()
         },
@@ -1770,7 +1770,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
         MinimapFieldLine,
         RenderLayers::layer(1),
     ));
-    // Líneas blancas del campo (bordes) - igual que RustBall (z = 0.0)
+    // Líneas blancas del campo (bordes)
     let thickness = 5.0;
     let w = config.arena_width;
     let h = config.arena_height;
@@ -2040,7 +2040,7 @@ fn process_network_messages(
             }
         } else {
             println!("⚽ [Bevy] Spawneando pelota visual en {:?}", ball.position);
-            // Igual que RustBall: usar textura con children
+            // Usar textura con children
             commands
                 .spawn((
                     Transform::from_xyz(ball.position.0, ball.position.1, 10.0), // Z=10 para estar sobre las líneas del mapa
@@ -2111,7 +2111,7 @@ fn process_network_messages(
                 let (player_color, opposite_color) =
                     get_team_colors(ps.team_index, &config.team_colors);
 
-                // Igual que RustBall: usar textura con children
+                // Usar textura con children
                 commands
                     .spawn((
                         Transform::from_xyz(ps.position.x, ps.position.y, 10.0), // Z=10 para estar sobre las líneas del mapa
