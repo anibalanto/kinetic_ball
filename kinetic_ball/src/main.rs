@@ -352,7 +352,6 @@ fn main() {
             Update,
             (
                 adjust_field_for_map,
-                render_map,
                 interpolate_entities,
                 keep_name_horizontal,
                 keep_l_horizontal,
@@ -363,7 +362,6 @@ fn main() {
                 update_player_sprite,
                 process_movements,
                 update_mode_visuals,
-                update_target_ball_position,
                 update_dash_cooldown,
                 update_camera_viewports,
                 spawn_minimap_dots,
@@ -407,6 +405,9 @@ struct DefaultFieldLine;
 
 #[derive(Component)]
 struct MinimapFieldLine;
+
+#[derive(Component)]
+struct MapLineEntity; // Líneas del mapa cargado (reemplazo de Gizmos)
 
 #[derive(Component)]
 struct FieldBackground;
@@ -1521,7 +1522,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>) {
             custom_size: Some(Vec2::new(config.arena_width, config.arena_height)),
             ..default()
         },
-        Transform::from_xyz(0.0, 0.0, -10.0),
+        Transform::from_xyz(0.0, 0.0, 0.0), // Z = 0 (fondo)
         FieldBackground,
         RenderLayers::layer(0),
     ));
@@ -1883,7 +1884,7 @@ fn process_network_messages(
             // Igual que RustBall: usar textura con children
             commands
                 .spawn((
-                    Transform::from_xyz(ball.position.0, ball.position.1, 0.0),
+                    Transform::from_xyz(ball.position.0, ball.position.1, 10.0), // Z=10 para estar sobre las líneas del mapa
                     Visibility::default(),
                     RemoteBall,
                     Collider::ball(config.ball_radius), // Para debug rendering
@@ -1954,7 +1955,7 @@ fn process_network_messages(
                 // Igual que RustBall: usar textura con children
                 commands
                     .spawn((
-                        Transform::from_xyz(ps.position.x, ps.position.y, 0.0),
+                        Transform::from_xyz(ps.position.x, ps.position.y, 10.0), // Z=10 para estar sobre las líneas del mapa
                         Visibility::default(),
                         RemotePlayer {
                             id: ps.id,
@@ -2547,16 +2548,25 @@ fn update_mode_visuals(
     }
 }
 
-// Sistema para ocultar líneas por defecto y ajustar campo cuando hay mapa
+// Sistema para ocultar líneas por defecto, ajustar campo y crear líneas del mapa
 fn adjust_field_for_map(
+    mut commands: Commands,
     loaded_map: Res<LoadedMap>,
     mut default_lines: Query<&mut Visibility, With<DefaultFieldLine>>,
     mut field_bg: Query<
         (&mut Sprite, &mut Transform),
         (With<FieldBackground>, Without<DefaultFieldLine>),
     >,
+    map_lines: Query<Entity, With<MapLineEntity>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     if loaded_map.is_changed() {
+        // Eliminar líneas del mapa anterior
+        for entity in map_lines.iter() {
+            commands.entity(entity).despawn();
+        }
+
         if let Some(map) = &loaded_map.0 {
             // Hay mapa: ocultar líneas por defecto
             for mut visibility in default_lines.iter_mut() {
@@ -2564,7 +2574,6 @@ fn adjust_field_for_map(
             }
 
             // Ajustar tamaño del campo según dimensiones del mapa
-            // Usar primero las dimensiones del nivel raíz, luego las del bg como fallback
             let width = map.width.or(map.bg.width);
             let height = map.height.or(map.bg.height);
 
@@ -2576,6 +2585,9 @@ fn adjust_field_for_map(
             } else {
                 println!("⚠️  Mapa sin dimensiones definidas, usando tamaño por defecto");
             }
+
+            // Crear líneas del mapa como sprites
+            spawn_map_lines(&mut commands, map, &mut meshes, &mut materials);
         } else {
             // No hay mapa: mostrar líneas por defecto
             for mut visibility in default_lines.iter_mut() {
@@ -2585,11 +2597,23 @@ fn adjust_field_for_map(
     }
 }
 
-// Sistema para renderizar el mapa usando Gizmos
-fn render_map(mut gizmos: Gizmos, loaded_map: Res<LoadedMap>) {
-    let Some(map) = &loaded_map.0 else {
-        return; // No hay mapa cargado
-    };
+// Constante Z para las líneas del mapa (entre el piso Z=0 y los jugadores Z=10+)
+const MAP_LINES_Z: f32 = 5.0;
+const LINE_THICKNESS: f32 = 3.0;
+
+// Crea sprites para las líneas del mapa
+fn spawn_map_lines(
+    commands: &mut Commands,
+    map: &shared::map::Map,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+) {
+    println!(
+        "🗺️  spawn_map_lines: {} vértices, {} segmentos, {} discos",
+        map.vertexes.len(),
+        map.segments.len(),
+        map.discs.len()
+    );
 
     // Colores según tipo de interacción
     let ball_color = Color::srgb(0.3, 0.7, 1.0); // Azul claro - solo pelota
@@ -2598,21 +2622,20 @@ fn render_map(mut gizmos: Gizmos, loaded_map: Res<LoadedMap>) {
     let vertex_color = Color::srgb(1.0, 0.2, 0.2); // Rojo para vértices
     let disc_color = Color::srgb(0.7, 0.7, 0.7); // Gris para discos
 
-    // Dibujar vértices (puntos de interacción)
-    for (_i, vertex) in map.vertexes.iter().enumerate() {
+    // Dibujar vértices (círculos pequeños)
+    for vertex in &map.vertexes {
         let pos = Vec2::new(vertex.x, vertex.y);
-        gizmos.circle_2d(pos, 3.0, vertex_color); // Radio pequeño 3.0
+        spawn_circle(commands, meshes, materials, pos, 3.0, vertex_color);
     }
 
-    // Dibujar segmentos (paredes)
+    // Dibujar segmentos (líneas)
     for segment in &map.segments {
-        // SKIP si el segmento es invisible (vis=false)
         if !segment.is_visible() {
             continue;
         }
 
         if segment.v0 >= map.vertexes.len() || segment.v1 >= map.vertexes.len() {
-            continue; // Saltar segmentos inválidos
+            continue;
         }
 
         let v0 = &map.vertexes[segment.v0];
@@ -2621,64 +2644,115 @@ fn render_map(mut gizmos: Gizmos, loaded_map: Res<LoadedMap>) {
         let p0 = Vec2::new(v0.x, v0.y);
         let p1 = Vec2::new(v1.x, v1.y);
 
-        // Determinar color según cMask (tipo de colisión)
+        // Determinar color según cMask
         let line_color = if let Some(cmask) = &segment.c_mask {
             if cmask.is_empty() || cmask.iter().any(|m| m.is_empty()) {
-                decorative_color // Sin colisión
+                decorative_color
             } else if cmask.iter().any(|m| m == "ball")
                 && !cmask.iter().any(|m| m == "red" || m == "blue")
             {
-                ball_color // Solo pelota
+                ball_color
             } else if cmask.iter().any(|m| m == "red" || m == "blue") {
-                player_color // Solo jugadores
+                player_color
             } else {
-                decorative_color // Otro caso sin interacción
+                decorative_color
             }
         } else {
-            decorative_color // Sin cMask = decorativo
+            decorative_color
         };
 
-        // Verificar si el segmento es curvo
         let curve_factor = segment.curve.or(segment.curve_f).unwrap_or(0.0);
 
         if curve_factor.abs() < 0.01 {
             // Segmento recto
-            gizmos.line_2d(p0, p1, line_color);
+            spawn_line_segment(commands, p0, p1, line_color);
         } else {
-            // Segmento curvo - aproximar con más líneas para mejor visualización
-            let num_segments = 24; // Más segmentos para curvas más suaves
-            let points = approximate_curve_for_rendering(
-                Vec2::new(v0.x, v0.y),
-                Vec2::new(v1.x, v1.y),
-                curve_factor,
-                num_segments,
-            );
-
-            // Dibujar líneas conectadas
+            // Segmento curvo - aproximar con múltiples líneas
+            let points = approximate_curve_for_rendering(p0, p1, curve_factor, 24);
             for i in 0..points.len() - 1 {
-                gizmos.line_2d(points[i], points[i + 1], line_color);
+                spawn_line_segment(commands, points[i], points[i + 1], line_color);
             }
         }
     }
 
-    // Dibujar discos (obstáculos circulares)
+    // Dibujar discos (círculos)
     for disc in &map.discs {
         let pos = Vec2::new(disc.pos[0], disc.pos[1]);
-        gizmos.circle_2d(pos, disc.radius, disc_color);
+        spawn_circle_outline(commands, meshes, materials, pos, disc.radius, disc_color);
     }
 }
 
-fn update_target_ball_position(mut gizmos: Gizmos, player_query: Query<&RemotePlayer>) {
-    for player in player_query.iter() {
-        let Some(b_target_pos) = player.ball_target_position else {
-            return;
-        };
-        println!("ball target pos {}", b_target_pos);
-
-        let disc_color = Color::srgb(0.7, 0.7, 0.7);
-
-        gizmos.circle_2d(b_target_pos, 3.0, disc_color);
+// Crea un sprite rectangular para representar una línea
+fn spawn_line_segment(commands: &mut Commands, p0: Vec2, p1: Vec2, color: Color) {
+    let delta = p1 - p0;
+    let length = delta.length();
+    if length < 0.01 {
+        return;
     }
+
+    let midpoint = (p0 + p1) * 0.5;
+    let angle = delta.y.atan2(delta.x);
+
+    commands.spawn((
+        Sprite {
+            color,
+            custom_size: Some(Vec2::new(length, LINE_THICKNESS)),
+            ..default()
+        },
+        Transform::from_xyz(midpoint.x, midpoint.y, MAP_LINES_Z)
+            .with_rotation(Quat::from_rotation_z(angle)),
+        MapLineEntity,
+        RenderLayers::layer(0),
+    ));
+}
+
+// Crea un círculo relleno
+fn spawn_circle(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+    pos: Vec2,
+    radius: f32,
+    color: Color,
+) {
+    commands.spawn((
+        Mesh2d(meshes.add(Circle::new(radius))),
+        MeshMaterial2d(materials.add(color)),
+        Transform::from_xyz(pos.x, pos.y, MAP_LINES_Z),
+        MapLineEntity,
+        RenderLayers::layer(0),
+    ));
+}
+
+// Crea un círculo solo con borde (outline)
+fn spawn_circle_outline(
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+    pos: Vec2,
+    radius: f32,
+    color: Color,
+) {
+    // Crear anillo usando círculo exterior menos interior
+    let outline_thickness = LINE_THICKNESS;
+
+    // Círculo exterior (borde)
+    commands.spawn((
+        Mesh2d(meshes.add(Circle::new(radius))),
+        MeshMaterial2d(materials.add(color)),
+        Transform::from_xyz(pos.x, pos.y, MAP_LINES_Z),
+        MapLineEntity,
+        RenderLayers::layer(0),
+    ));
+
+    // Círculo interior (transparente/color del fondo) - simula outline
+    commands.spawn((
+        Mesh2d(meshes.add(Circle::new(radius - outline_thickness))),
+        MeshMaterial2d(materials.add(Color::srgba(0.0, 0.0, 0.0, 0.0))), // Transparente
+        Transform::from_xyz(pos.x, pos.y, MAP_LINES_Z + 0.1), // Ligeramente por encima
+        MapLineEntity,
+        RenderLayers::layer(0),
+    ));
 }
 
 // Función auxiliar para aproximar curvas (HaxBall curve format)
