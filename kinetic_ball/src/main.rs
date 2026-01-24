@@ -3,8 +3,8 @@ use bevy::camera::{visibility::RenderLayers, RenderTarget, ScalingMode};
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureDimension, TextureFormat, TextureUsages};
-use bevy::ui::widget::ViewportNode;
 use bevy::sprite::Anchor;
+use bevy::ui::widget::ViewportNode;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
@@ -356,8 +356,6 @@ fn main() {
                 adjust_field_for_map,
                 interpolate_entities,
                 keep_name_horizontal,
-                keep_l_horizontal,
-                keep_r_horizontal,
                 camera_follow_player,
                 camera_zoom_control,
                 update_charge_bar,
@@ -369,6 +367,7 @@ fn main() {
                 sync_minimap_dots,
                 cleanup_minimap_dots,
                 update_detail_camera_background,
+                animate_keys,
             )
                 .run_if(in_state(AppState::InGame)),
         )
@@ -469,12 +468,6 @@ struct StaminChargeBar;
 struct PlayerNameText;
 
 #[derive(Component)]
-struct LeftText;
-
-#[derive(Component)]
-struct RightText;
-
-#[derive(Component)]
 struct PlayerSprite {
     parent_id: u32,
 }
@@ -494,6 +487,11 @@ struct MinimapDot {
 
 #[derive(Component)]
 struct MinimapFieldBackground;
+
+#[derive(Component)]
+pub struct KeyVisual {
+    pub key_code: KeyCode,
+}
 
 // ============================================================================
 // SISTEMAS DE MENÚ
@@ -1465,6 +1463,83 @@ async fn start_webrtc_client(
 // GAME SYSTEMS
 // ============================================================================
 
+fn spawn_key_visual_2d(
+    parent: &mut ChildSpawnerCommands,
+    key_text: &str,
+    key_code: KeyCode,
+    translation: Vec3,
+    rotation: Quat, // <--- Reincorporado
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+    render_layers: RenderLayers,
+) {
+    let font_size = match key_text.len() {
+        1 => 32.0,
+        2 => 28.0,
+        _ => 22.0,
+    };
+
+    let key_width = (key_text.len() as f32 * 20.0).max(50.0);
+    let key_height = 50.0;
+
+    parent
+        .spawn((
+            KeyVisual { key_code },
+            Transform {
+                translation,
+                rotation, // <--- Aplicamos la rotación aquí
+                ..default()
+            },
+            Visibility::default(),
+            render_layers.clone(),
+        ))
+        .with_children(|key| {
+            // SOMBRA (Fija en la base)
+            key.spawn((
+                Mesh2d(meshes.add(Rectangle::new(key_width + 4.0, key_height + 8.0))),
+                MeshMaterial2d(materials.add(Color::srgb(0.05, 0.05, 0.05))),
+                Transform::from_xyz(0.0, -4.0, -0.1),
+                render_layers.clone(),
+            ));
+
+            // CUERPO MÓVIL (Lo que se hunde al presionar)
+            key.spawn((
+                Transform::default(),
+                Visibility::default(),
+                render_layers.clone(),
+            ))
+            .with_children(|body| {
+                // Borde/Highlight
+                body.spawn((
+                    Mesh2d(meshes.add(Rectangle::new(key_width + 2.0, key_height + 2.0))),
+                    MeshMaterial2d(materials.add(Color::srgb(0.4, 0.4, 0.4))),
+                    Transform::from_xyz(0.0, 0.0, 0.1),
+                    render_layers.clone(),
+                ));
+
+                // Superficie principal
+                body.spawn((
+                    Mesh2d(meshes.add(Rectangle::new(key_width, key_height))),
+                    MeshMaterial2d(materials.add(Color::srgb(0.2, 0.2, 0.2))),
+                    Transform::from_xyz(0.0, 0.0, 0.2),
+                    render_layers.clone(),
+                ));
+
+                // Texto de la tecla
+                body.spawn((
+                    Text2d::new(key_text),
+                    TextFont {
+                        font_size,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                    Transform::from_xyz(0.0, 0.0, 0.3),
+                    render_layers.clone(),
+                ));
+            });
+        });
+}
+
 fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Assets<Image>>) {
     // Cámara principal - Layer 0 (todo excepto minimap dots)
     commands.spawn((
@@ -1819,6 +1894,7 @@ fn process_network_messages(
     mut loaded_map: ResMut<LoadedMap>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    keybindings: Res<KeyBindingsConfig>,
     mut ball_q: Query<(&mut Interpolated, &mut Transform, &RemoteBall), Without<RemotePlayer>>,
     mut players_q: Query<
         (
@@ -2214,38 +2290,43 @@ fn process_network_messages(
                             RenderLayers::layer(0),
                         ));
 
-                        // Solo para jugador local: indicadores de curva
+                        // Indicadores de teclas de curva (solo para jugador local)
                         if is_local {
-                            parent.spawn((
-                                LeftText,
-                                Text2d::new("I"),
-                                TextFont {
-                                    font: embedded_assets.emoji_font.clone(),
-                                    font_size: 30.0,
-                                    ..default()
-                                },
-                                Transform {
-                                    translation: Vec3::new(0.0, config.ball_radius * 4.0, 10.0),
-                                    rotation: Quat::from_rotation_z(angle_90),
-                                    ..default()
-                                },
+                            let angle_90 = std::f32::consts::FRAC_PI_2;
+                            let curve_left_text = key_code_display_name(keybindings.curve_left.0);
+                            let curve_right_text = key_code_display_name(keybindings.curve_right.0);
+
+                            // Tecla izquierda (curve_left)
+                            spawn_key_visual_2d(
+                                parent,
+                                &curve_left_text,
+                                keybindings.curve_left.0,
+                                Vec3::new(
+                                    config.sphere_radius / 2.0,
+                                    -config.sphere_radius * 2.0,
+                                    50.0,
+                                ),
+                                Quat::from_rotation_z(-angle_90),
+                                &mut meshes,
+                                &mut materials,
                                 RenderLayers::layer(2),
-                            ));
-                            parent.spawn((
-                                RightText,
-                                Text2d::new("D"),
-                                TextFont {
-                                    font: embedded_assets.emoji_font.clone(),
-                                    font_size: 30.0,
-                                    ..default()
-                                },
-                                Transform {
-                                    translation: Vec3::new(0.0, -config.ball_radius * 4.0, 10.0),
-                                    rotation: Quat::from_rotation_z(angle_90),
-                                    ..default()
-                                },
+                            );
+
+                            // Tecla derecha (curve_right)
+                            spawn_key_visual_2d(
+                                parent,
+                                &curve_right_text,
+                                keybindings.curve_right.0,
+                                Vec3::new(
+                                    config.sphere_radius / 2.0,
+                                    config.sphere_radius * 2.0,
+                                    50.0,
+                                ),
+                                Quat::from_rotation_z(-angle_90),
+                                &mut meshes,
+                                &mut materials,
                                 RenderLayers::layer(2),
-                            ));
+                            );
                         }
                     });
             }
@@ -2262,30 +2343,6 @@ fn keep_name_horizontal(
         if let Ok(parent_transform) = parent_query.get(child_of.parent()) {
             // Contrarrestar la rotación del padre para que el texto quede horizontal
             name_transform.rotation = parent_transform.rotation.inverse();
-        }
-    }
-}
-
-fn keep_l_horizontal(
-    mut l_query: Query<(&mut Transform, &ChildOf), With<LeftText>>,
-    parent_query: Query<&Transform, (With<RemotePlayer>, Without<LeftText>)>,
-) {
-    for (mut l_transform, child_of) in l_query.iter_mut() {
-        if let Ok(parent_transform) = parent_query.get(child_of.parent()) {
-            // Contrarrestar la rotación del padre para que el texto quede horizontal
-            l_transform.rotation = parent_transform.rotation.inverse();
-        }
-    }
-}
-
-fn keep_r_horizontal(
-    mut r_query: Query<(&mut Transform, &ChildOf), With<RightText>>,
-    parent_query: Query<&Transform, (With<RemotePlayer>, Without<RightText>)>,
-) {
-    for (mut r_transform, child_of) in r_query.iter_mut() {
-        if let Ok(parent_transform) = parent_query.get(child_of.parent()) {
-            // Contrarrestar la rotación del padre para que el texto quede horizontal
-            r_transform.rotation = parent_transform.rotation.inverse();
         }
     }
 }
@@ -2810,7 +2867,7 @@ fn spawn_circle_outline(
     commands.spawn((
         Mesh2d(meshes.add(Circle::new(radius - outline_thickness))),
         MeshMaterial2d(materials.add(Color::srgba(0.0, 0.0, 0.0, 0.0))), // Transparente
-        Transform::from_xyz(pos.x, pos.y, MAP_LINES_Z + 0.1), // Ligeramente por encima
+        Transform::from_xyz(pos.x, pos.y, MAP_LINES_Z + 0.1),            // Ligeramente por encima
         MapLineEntity,
         RenderLayers::layer(0),
     ));
@@ -2999,5 +3056,33 @@ fn update_detail_camera_background(
     // Actualizar clear_color de la cámara
     if let Ok(mut cam) = camera_q.single_mut() {
         cam.clear_color = ClearColorConfig::Custom(Color::srgb(r, g, b));
+    }
+}
+
+fn animate_keys(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut key_query: Query<(&KeyVisual, &Children)>,
+    mut transform_query: Query<&mut Transform>,
+    time: Res<Time>,
+) {
+    for (key_visual, children) in key_query.iter() {
+        // El cuerpo móvil es el segundo hijo (índice 1) según nuestro spawn_key_visual_2d
+        if let Some(&body_entity) = children.get(1) {
+            if let Ok(mut transform) = transform_query.get_mut(body_entity) {
+                // Si la tecla está presionada, el objetivo es -4.0 (hundida hacia la sombra)
+                // Si no, el objetivo es 0.0 (posición original)
+                let target_y = if keyboard_input.pressed(key_visual.key_code) {
+                    -4.0
+                } else {
+                    0.0
+                };
+
+                // Usamos un lerp suave para que la tecla no "teletransporte",
+                // sino que se sienta elástica y física.
+                let speed = 25.0;
+                transform.translation.y = transform.translation.y
+                    + (target_y - transform.translation.y) * speed * time.delta_secs();
+            }
+        }
     }
 }
