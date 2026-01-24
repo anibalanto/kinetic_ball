@@ -197,18 +197,26 @@ impl AppState {
             return Err("Invalid token".to_string());
         }
 
+        self.delete_room_by_host(room_id).await;
+        Ok(())
+    }
+
+    /// Delete a room when host disconnects (internal use)
+    pub async fn delete_room_by_host(&self, room_id: &str) {
         // Remove room
         let mut rooms = self.rooms.write().await;
-        rooms.remove(room_id);
+        if rooms.remove(room_id).is_some() {
+            tracing::info!(room_id = %room_id, "Room deleted (host disconnected)");
+        }
+        drop(rooms);
 
-        // Remove token
+        // Find and remove associated token
         let mut tokens = self.tokens.write().await;
-        tokens.remove(token);
+        tokens.retain(|_, rid| rid != room_id);
+        drop(tokens);
 
         // Remove connections tracking
         let mut connections = self.connections.write().await;
         connections.remove(room_id);
-
-        Ok(())
     }
 }

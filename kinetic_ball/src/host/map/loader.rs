@@ -29,23 +29,28 @@ pub fn load_map<P: AsRef<Path>>(path: P) -> Result<Map, MapLoadError> {
     let content = std::fs::read_to_string(&path)
         .map_err(|_| MapLoadError::FileNotFound(path_str.clone()))?;
 
+    load_map_from_str(&content, &path_str)
+}
+
+/// Cargar un mapa desde un string (para mapas embebidos)
+pub fn load_map_from_str(content: &str, name: &str) -> Result<Map, MapLoadError> {
     // Intentar JSON5 primero (estándar de HaxBall)
-    if let Ok(map) = json5::from_str::<Map>(&content) {
+    if let Ok(map) = json5::from_str::<Map>(content) {
         validate_map(&map)?;
-        println!("✅ Loaded map from JSON5: {}", path_str);
+        println!("✅ Loaded map from JSON5: {}", name);
         return Ok(map);
     }
 
     // Fallback a JSON regular
-    if let Ok(map) = serde_json::from_str::<Map>(&content) {
+    if let Ok(map) = serde_json::from_str::<Map>(content) {
         validate_map(&map)?;
-        println!("✅ Loaded map from JSON: {}", path_str);
+        println!("✅ Loaded map from JSON: {}", name);
         return Ok(map);
     }
 
     Err(MapLoadError::ParseError(format!(
         "Failed to parse {} as JSON5 or JSON",
-        path_str
+        name
     )))
 }
 

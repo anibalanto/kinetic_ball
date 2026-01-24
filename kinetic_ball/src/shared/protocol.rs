@@ -240,9 +240,6 @@ pub struct GameConfig {
     // Map loading
     #[serde(default)]
     pub map_path: Option<String>,
-
-    #[serde(default = "default_true")]
-    pub use_default_walls: bool,
 }
 
 fn default_true() -> bool {
@@ -308,7 +305,6 @@ impl Default for GameConfig {
 
             // Map loading
             map_path: None,
-            use_default_walls: true,
         }
     }
 }

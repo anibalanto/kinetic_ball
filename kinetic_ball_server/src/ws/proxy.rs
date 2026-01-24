@@ -210,9 +210,10 @@ async fn proxy_websocket(
         }
     }
 
-    // If this was a server connection, untrack it
+    // If this was a server (host) connection, delete the room entirely
     if let Some((state, room_id)) = server_tracking {
-        state.remove_connection(&room_id).await;
+        tracing::info!(room_id = %room_id, "Host disconnected, deleting room");
+        state.delete_room_by_host(&room_id).await;
     }
 
     Ok(())

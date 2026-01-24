@@ -379,3 +379,65 @@ pub fn save_keybindings(config: &KeyBindingsConfig) -> Result<(), String> {
     println!("[Config] Keybindings guardados en {:?}", path);
     Ok(())
 }
+
+// ============================================
+// Configuración General (servidor, etc.)
+// ============================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub server: String,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            server: "kinetic-ball.fly.dev".to_string(),
+        }
+    }
+}
+
+pub fn get_app_config_path() -> Option<PathBuf> {
+    get_config_dir().map(|p| p.join("config.ron"))
+}
+
+pub fn load_app_config() -> AppConfig {
+    let Some(path) = get_app_config_path() else {
+        println!("[Config] No se pudo determinar la ruta de config, usando defaults");
+        return AppConfig::default();
+    };
+
+    match fs::read_to_string(&path) {
+        Ok(content) => match ron::from_str::<AppConfig>(&content) {
+            Ok(config) => {
+                println!("[Config] App config cargado desde {:?}", path);
+                config
+            }
+            Err(e) => {
+                println!("[Config] Error parseando config: {}, usando defaults", e);
+                AppConfig::default()
+            }
+        },
+        Err(_) => {
+            println!("[Config] No existe archivo de config, usando defaults");
+            AppConfig::default()
+        }
+    }
+}
+
+pub fn save_app_config(config: &AppConfig) -> Result<(), String> {
+    let config_dir = get_config_dir().ok_or("No se pudo determinar directorio de config")?;
+
+    fs::create_dir_all(&config_dir)
+        .map_err(|e| format!("Error creando directorio de config: {}", e))?;
+
+    let path = config_dir.join("config.ron");
+
+    let content = ron::ser::to_string_pretty(config, ron::ser::PrettyConfig::default())
+        .map_err(|e| format!("Error serializando config: {}", e))?;
+
+    fs::write(&path, content).map_err(|e| format!("Error escribiendo archivo: {}", e))?;
+
+    println!("[Config] App config guardado en {:?}", path);
+    Ok(())
+}

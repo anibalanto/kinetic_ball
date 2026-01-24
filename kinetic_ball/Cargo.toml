@@ -39,3 +39,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 
 # Clipboard access (wayland-data-control para soporte Wayland nativo)
 arboard = { version = "3.4", features = ["wayland-data-control"] }
+
+# File dialog para seleccionar mapas
+rfd = "0.15"

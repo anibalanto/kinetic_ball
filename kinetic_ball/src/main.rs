@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex};
 
 mod keybindings;
 use keybindings::{
-    key_code_display_name, load_keybindings, save_keybindings, GameAction, KeyBindingsConfig,
-    SettingsUIState,
+    key_code_display_name, load_app_config, load_keybindings, save_app_config, save_keybindings,
+    AppConfig, GameAction, KeyBindingsConfig, SettingsUIState,
 };
 
 mod host;
@@ -28,6 +28,7 @@ mod shared;
 
 const BALL_PNG: &[u8] = include_bytes!("../assets/ball.png");
 const EMOJI_FONT: &[u8] = include_bytes!("../assets/NotoColorEmoji_WindowsCompatible.ttf");
+const DEFAULT_MAP: &str = include_str!("../assets/cancha_grande.hbs");
 
 // ============================================================================
 // RECURSO PARA MOVIMIENTOS ACTIVOS
@@ -41,8 +42,8 @@ struct GameTick(u32);
 #[command(about = "Cliente del juego Haxball", long_about = None)]
 struct Args {
     /// Host del proxy (sin protocolo). Ejemplo: localhost:3537 o proxy.ejemplo.com
-    #[arg(short, long, default_value = "127.0.0.1:3537")]
-    server: String,
+    #[arg(short, long)]
+    server: Option<String>,
 
     /// Nombre de la sala/room
     #[arg(short, long, default_value = "game_server")]
@@ -119,9 +120,9 @@ struct CreateRoomConfig {
 impl Default for CreateRoomConfig {
     fn default() -> Self {
         Self {
-            room_name: String::from("Mi Sala"),
+            room_name: String::from("mi_sala"),
             max_players: 4,
-            map_path: String::new(),
+            map_path: String::new(), // Vacío = usar mapa embebido por defecto
             scale: 1.0,
         }
     }
@@ -139,9 +140,12 @@ struct ConnectionConfig {
 }
 
 impl ConnectionConfig {
-    fn from_args(args: &Args) -> Self {
+    fn from_args(args: &Args, app_config: &AppConfig) -> Self {
         Self {
-            server_host: args.server.clone(),
+            server_host: args
+                .server
+                .clone()
+                .unwrap_or_else(|| app_config.server.clone()),
             room: args.room.clone(),
             player_name: args.name.clone(),
         }
@@ -247,6 +251,7 @@ fn main() {
         .expect("Failed to install rustls crypto provider");
 
     let args = Args::parse();
+    let app_config = load_app_config();
     println!("🎮 Haxball Client - Iniciando...");
 
     // Bevy
@@ -266,8 +271,8 @@ fn main() {
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
         // Estado de la aplicación
         .init_state::<AppState>()
-        // Configuración de conexión (valores iniciales desde args)
-        .insert_resource(ConnectionConfig::from_args(&args))
+        // Configuración de conexión (valores iniciales desde args y config)
+        .insert_resource(ConnectionConfig::from_args(&args, &app_config))
         // Recursos del juego (se inicializan vacíos, se llenan al conectar)
         .insert_resource(GameConfig::default())
         .insert_resource(NetworkChannels::default())
@@ -299,7 +304,10 @@ fn main() {
             settings_ui.run_if(in_state(AppState::Settings)),
         )
         // Sistemas de selección de sala (solo en estado RoomSelection)
-        .add_systems(OnEnter(AppState::RoomSelection), (setup_menu_camera_if_needed, fetch_rooms))
+        .add_systems(
+            OnEnter(AppState::RoomSelection),
+            (setup_menu_camera_if_needed, fetch_rooms),
+        )
         .add_systems(
             EguiPrimaryContextPass,
             room_selection_ui.run_if(in_state(AppState::RoomSelection)),
@@ -315,13 +323,19 @@ fn main() {
             create_room_ui.run_if(in_state(AppState::CreateRoom)),
         )
         // Sistemas de hosting (solo en estado HostingRoom)
-        .add_systems(OnEnter(AppState::HostingRoom), (setup_menu_camera_if_needed, start_hosting))
+        .add_systems(
+            OnEnter(AppState::HostingRoom),
+            (setup_menu_camera_if_needed, start_hosting),
+        )
         .add_systems(
             EguiPrimaryContextPass,
             hosting_ui.run_if(in_state(AppState::HostingRoom)),
         )
         // Sistema de conexión (solo en estado Connecting)
-        .add_systems(OnEnter(AppState::Connecting), (cleanup_menu_camera, start_connection).chain())
+        .add_systems(
+            OnEnter(AppState::Connecting),
+            (cleanup_menu_camera, start_connection).chain(),
+        )
         .add_systems(
             Update,
             check_connection.run_if(in_state(AppState::Connecting)),
@@ -553,16 +567,14 @@ fn menu_ui(
                     );
                     if ui.button("📋").on_hover_text("Pegar").clicked() {
                         match arboard::Clipboard::new() {
-                            Ok(mut clipboard) => {
-                                match clipboard.get_text() {
-                                    Ok(text) => {
-                                        let trimmed = text.trim().to_string();
-                                        println!("📋 Pegando servidor: {}", trimmed);
-                                        config.server_host = trimmed;
-                                    }
-                                    Err(e) => println!("❌ Error obteniendo texto: {:?}", e),
+                            Ok(mut clipboard) => match clipboard.get_text() {
+                                Ok(text) => {
+                                    let trimmed = text.trim().to_string();
+                                    println!("📋 Pegando servidor: {}", trimmed);
+                                    config.server_host = trimmed;
                                 }
-                            }
+                                Err(e) => println!("❌ Error obteniendo texto: {:?}", e),
+                            },
                             Err(e) => println!("❌ Error creando clipboard: {:?}", e),
                         }
                     }
@@ -845,10 +857,7 @@ fn fetch_rooms(
     });
 }
 
-fn check_rooms_fetch(
-    mut room_list: ResMut<RoomList>,
-    mut fetch_channel: ResMut<RoomFetchChannel>,
-) {
+fn check_rooms_fetch(mut room_list: ResMut<RoomList>, mut fetch_channel: ResMut<RoomFetchChannel>) {
     let result = if let Some(ref rx) = fetch_channel.receiver {
         if let Ok(guard) = rx.lock() {
             guard.try_recv().ok()
@@ -1003,11 +1012,7 @@ fn room_selection_ui(
 
                             ui.horizontal(|ui| {
                                 // Nombre de la sala
-                                ui.label(
-                                    egui::RichText::new(&room.name)
-                                        .size(18.0)
-                                        .strong(),
-                                );
+                                ui.label(egui::RichText::new(&room.name).size(18.0).strong());
 
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
@@ -1144,12 +1149,21 @@ fn create_room_ui(
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
-                    ui.label("Mapa (opcional):");
+                    ui.label("Mapa:");
                     ui.add_sized(
-                        [250.0, 24.0],
+                        [200.0, 24.0],
                         egui::TextEdit::singleline(&mut create_config.map_path)
-                            .hint_text("Ruta al archivo .hbs"),
+                            .hint_text("(embebido por defecto)"),
                     );
+                    if ui.button("📂").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Mapas", &["json5", "json", "hbs"])
+                            .set_directory("maps")
+                            .pick_file()
+                        {
+                            create_config.map_path = path.display().to_string();
+                        }
+                    }
                 });
 
                 ui.add_space(10.0);
@@ -1179,10 +1193,7 @@ fn create_room_ui(
     });
 }
 
-fn start_hosting(
-    config: Res<ConnectionConfig>,
-    create_config: Res<CreateRoomConfig>,
-) {
+fn start_hosting(config: Res<ConnectionConfig>, create_config: Res<CreateRoomConfig>) {
     let server_host = config.server_host.clone();
     let room_name = create_config.room_name.clone();
     let max_players = create_config.max_players;
@@ -1194,10 +1205,13 @@ fn start_hosting(
     let scale = create_config.scale;
 
     // Generar room_id único
-    let room_id = format!("room_{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs());
+    let room_id = format!(
+        "room_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
 
     println!("🚀 Iniciando host...");
     println!("   Sala: {}", room_name);
@@ -1208,6 +1222,7 @@ fn start_hosting(
     std::thread::spawn(move || {
         host::host(
             map_path,
+            DEFAULT_MAP,
             scale,
             room_id,
             server_host,
@@ -1230,25 +1245,20 @@ fn hosting_ui(
             ui.heading(egui::RichText::new("🎮 Sala Activa").size(36.0));
             ui.add_space(20.0);
 
-            ui.label(
-                egui::RichText::new(format!("Sala: {}", create_config.room_name))
-                    .size(24.0)
-            );
+            ui.label(egui::RichText::new(format!("Sala: {}", create_config.room_name)).size(24.0));
             ui.add_space(10.0);
             ui.label(
                 egui::RichText::new(format!("Jugadores máximos: {}", create_config.max_players))
                     .size(18.0)
-                    .color(egui::Color32::GRAY)
+                    .color(egui::Color32::GRAY),
             );
 
             ui.add_space(30.0);
             ui.label(
-                egui::RichText::new("El servidor está corriendo en segundo plano.")
-                    .size(16.0)
+                egui::RichText::new("El servidor está corriendo en segundo plano.").size(16.0),
             );
             ui.label(
-                egui::RichText::new("Los jugadores pueden unirse desde 'Ver Salas'.")
-                    .size(16.0)
+                egui::RichText::new("Los jugadores pueden unirse desde 'Ver Salas'.").size(16.0),
             );
 
             ui.add_space(50.0);
@@ -1267,16 +1277,13 @@ fn hosting_ui(
             ui.label(
                 egui::RichText::new("Nota: El servidor seguirá activo aunque vuelvas al menú")
                     .size(12.0)
-                    .color(egui::Color32::GRAY)
+                    .color(egui::Color32::GRAY),
             );
         });
     });
 }
 
-fn start_connection(
-    config: Res<ConnectionConfig>,
-    mut channels: ResMut<NetworkChannels>,
-) {
+fn start_connection(config: Res<ConnectionConfig>, mut channels: ResMut<NetworkChannels>) {
     let (network_tx, network_rx) = mpsc::channel();
     let (input_tx, input_rx) = mpsc::channel();
 
@@ -1935,7 +1942,9 @@ fn process_network_messages(
 
                 println!(
                     "🆕 [Bevy] Spawneando jugador visual: {} (ID: {}) {}",
-                    ps.name, ps.id, if is_local { "(LOCAL)" } else { "" }
+                    ps.name,
+                    ps.id,
+                    if is_local { "(LOCAL)" } else { "" }
                 );
 
                 // Colores de equipo desde la configuración

@@ -1,7 +1,7 @@
+use crate::shared::*;
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 use matchbox_socket::PeerId;
-use crate::shared::*;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -11,6 +11,7 @@ use super::network::*;
 
 pub fn host(
     map: Option<String>,
+    default_map_content: &'static str,
     scale: f32,
     room: String,
     server_host: String,
@@ -22,16 +23,15 @@ pub fn host(
     // Clone map path for later use in proxy registration
     let map_name_for_proxy = map.clone();
 
-    // Configurar GameConfig con el mapa desde CLI
+    // Configurar GameConfig con el mapa
     let (game_config, loaded_map) = if let Some(map_path) = map {
+        // Cargar mapa externo
         println!("🗺️  Cargando mapa: {}", map_path);
 
-        // Intentar cargar el mapa
         let loaded_map = match super::map::load_map(&map_path) {
             Ok(mut m) => {
                 println!("   ✅ Mapa cargado: {}", m.name);
 
-                // Aplicar escala si es diferente de 1.0
                 if (scale - 1.0).abs() > 0.01 {
                     println!("   📏 Aplicando escala: {}x", scale);
                     m.scale(scale);
@@ -41,21 +41,42 @@ pub fn host(
             }
             Err(e) => {
                 eprintln!("   ⚠️  Error cargando mapa: {}", e);
-                eprintln!("   Continuando con arena por defecto");
+                eprintln!("   Continuando con mapa embebido por defecto");
                 None
             }
         };
 
         let config = GameConfig {
             map_path: Some(map_path),
-            use_default_walls: loaded_map.is_none(),
             ..Default::default()
         };
 
         (config, loaded_map)
     } else {
-        println!("🏟️  Usando arena por defecto");
-        (GameConfig::default(), None)
+        // Usar mapa embebido por defecto
+        println!("🏟️  Usando mapa embebido por defecto");
+
+        let loaded_map =
+            match super::map::load_map_from_str(default_map_content, "cancha_grande (embebido)") {
+                Ok(mut m) => {
+                    if (scale - 1.0).abs() > 0.01 {
+                        println!("   📏 Aplicando escala: {}x", scale);
+                        m.scale(scale);
+                    }
+                    Some(m)
+                }
+                Err(e) => {
+                    eprintln!("   ⚠️  Error cargando mapa embebido: {}", e);
+                    None
+                }
+            };
+
+        let config = GameConfig {
+            map_path: None,
+            ..Default::default()
+        };
+
+        (config, loaded_map)
     };
 
     println!("🌐 Conectando al proxy en: {}", server_host);
@@ -369,58 +390,5 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         false
     };
 
-    // Fallback: crear paredes por defecto si no hay mapa o falló la carga
-    if !map_loaded || config.use_default_walls {
-        spawn_default_walls(&mut commands, &config);
-    }
-
     println!("✅ Juego configurado");
-}
-
-// Función auxiliar: spawner paredes por defecto
-fn spawn_default_walls(commands: &mut Commands, config: &GameConfig) {
-    let wall_thickness = 10.0;
-    let wall_collision = CollisionGroups::new(Group::GROUP_1, Group::ALL);
-
-    // Pared superior
-    commands.spawn((
-        RigidBody::Fixed,
-        Collider::cuboid(config.arena_width / 2.0, wall_thickness),
-        wall_collision,
-        Restitution::coefficient(config.wall_restitution),
-        Transform::from_xyz(0.0, config.arena_height / 2.0, 0.0),
-        GlobalTransform::default(),
-    ));
-
-    // Pared inferior
-    commands.spawn((
-        RigidBody::Fixed,
-        Collider::cuboid(config.arena_width / 2.0, wall_thickness),
-        wall_collision,
-        Restitution::coefficient(config.wall_restitution),
-        Transform::from_xyz(0.0, -config.arena_height / 2.0, 0.0),
-        GlobalTransform::default(),
-    ));
-
-    // Pared izquierda
-    commands.spawn((
-        RigidBody::Fixed,
-        Collider::cuboid(wall_thickness, config.arena_height / 2.0),
-        wall_collision,
-        Restitution::coefficient(config.wall_restitution),
-        Transform::from_xyz(-config.arena_width / 2.0, 0.0, 0.0),
-        GlobalTransform::default(),
-    ));
-
-    // Pared derecha
-    commands.spawn((
-        RigidBody::Fixed,
-        Collider::cuboid(wall_thickness, config.arena_height / 2.0),
-        wall_collision,
-        Restitution::coefficient(config.wall_restitution),
-        Transform::from_xyz(config.arena_width / 2.0, 0.0, 0.0),
-        GlobalTransform::default(),
-    ));
-
-    println!("✅ Default walls spawned");
 }
