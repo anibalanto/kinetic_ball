@@ -127,7 +127,7 @@ pub fn host(
             TimerMode::Repeating,
         ))) // 60 Hz
         .init_resource::<GameInputManager>()
-        .add_systems(Startup, (configure_rapier, setup_game).chain())
+        .add_systems(Startup, (configure_rapier, setup_game, setup_map).chain())
         .add_systems(
             FixedUpdate,
             (

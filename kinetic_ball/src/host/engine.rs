@@ -11,8 +11,18 @@ use crate::shared::{GameConfig, TICK_RATE};
 
 use super::input::GameAction;
 use super::host::{Ball, GameInputManager, GameTick, Player, SlideCube, Sphere};
-
+use crate::host::map::converter::MapConverter;
+use crate::host::map::loader;
 use rand::Rng;
+
+const DEFAULT_MAP: &str = include_str!("../../assets/cancha_grande.hbs");
+
+pub fn setup_map(mut commands: Commands) {
+    let map = loader::load_map_from_str(DEFAULT_MAP, "default_map").unwrap();
+    let converter = MapConverter::new();
+    converter.spawn_map_geometry(&mut commands, &map);
+    info!("Mapa por defecto spawneado en el host");
+}
 
 /// Aplica el kick a la pelota con la curva y spin correspondientes
 /// Retorna la dirección final después de aplicar la curva
