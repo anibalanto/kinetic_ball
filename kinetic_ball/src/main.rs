@@ -1,7 +1,9 @@
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::{visibility::RenderLayers, ScalingMode};
+use bevy::camera::{visibility::RenderLayers, RenderTarget, ScalingMode};
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
+use bevy::render::render_resource::{TextureDimension, TextureFormat, TextureUsages};
+use bevy::ui::widget::ViewportNode;
 use bevy::sprite::Anchor;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bevy_rapier2d::prelude::*;
@@ -363,11 +365,9 @@ fn main() {
                 process_movements,
                 update_mode_visuals,
                 update_dash_cooldown,
-                update_camera_viewports,
                 spawn_minimap_dots,
                 sync_minimap_dots,
                 cleanup_minimap_dots,
-                draw_minimap_frame,
                 update_detail_camera_background,
             )
                 .run_if(in_state(AppState::InGame)),
@@ -1465,12 +1465,12 @@ async fn start_webrtc_client(
 // GAME SYSTEMS
 // ============================================================================
 
-fn setup(mut commands: Commands, config: Res<GameConfig>) {
+fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Assets<Image>>) {
     // Cámara principal - Layer 0 (todo excepto minimap dots)
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
-            scale: 3.0, // Reducido de 2.0 para ver el campo más grande
+            scale: 3.0,
             ..OrthographicProjection::default_2d()
         }),
         Transform::from_xyz(0.0, 0.0, 999.0),
@@ -1478,42 +1478,137 @@ fn setup(mut commands: Commands, config: Res<GameConfig>) {
         RenderLayers::layer(0),
     ));
 
-    // Cámara minimapa - Layer 1 (solo puntos simples)
-    // Usa ScalingMode::Fixed para mostrar todo el campo, con deformación si es necesario
-    commands.spawn((
-        Camera2d,
-        Camera {
-            order: 1,
-            ..default()
-        },
-        Projection::Orthographic(OrthographicProjection {
-            scaling_mode: ScalingMode::Fixed {
-                width: config.arena_width,
-                height: config.arena_height,
-            },
-            ..OrthographicProjection::default_2d()
-        }),
-        Transform::from_xyz(0.0, 0.0, 999.0),
-        MinimapCamera,
-        RenderLayers::layer(1),
-    ));
+    // --- Crear texturas de render target para ViewportNodes ---
+    let minimap_size = UVec2::new(300, 180);
+    let detail_size = UVec2::new(200, 200);
 
-    // --- Cámara Detalle Jugador (Abajo Derecha) - Layer 0 ---
-    commands.spawn((
-        Camera2d,
-        Camera {
-            order: 2,
-            clear_color: ClearColorConfig::Custom(Color::srgb(0.2, 0.2, 0.2)), // Se actualiza dinámicamente
-            ..default()
+    // Textura para minimapa
+    let mut minimap_image = Image::new_uninit(
+        bevy::render::render_resource::Extent3d {
+            width: minimap_size.x,
+            height: minimap_size.y,
+            depth_or_array_layers: 1,
         },
-        Projection::Orthographic(OrthographicProjection {
-            scale: 1.5, // Zoom alejado para ver jugador más pequeño (3x más lejos)
-            ..OrthographicProjection::default_2d()
-        }),
-        Transform::from_xyz(0.0, 0.0, 999.0),
-        PlayerDetailCamera,
-        RenderLayers::layer(2),
-    ));
+        TextureDimension::D2,
+        TextureFormat::Bgra8UnormSrgb,
+        RenderAssetUsages::all(),
+    );
+    minimap_image.texture_descriptor.usage =
+        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+    let minimap_image_handle = images.add(minimap_image);
+
+    // Textura para detalle del jugador
+    let mut detail_image = Image::new_uninit(
+        bevy::render::render_resource::Extent3d {
+            width: detail_size.x,
+            height: detail_size.y,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        TextureFormat::Bgra8UnormSrgb,
+        RenderAssetUsages::all(),
+    );
+    detail_image.texture_descriptor.usage =
+        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+    let detail_image_handle = images.add(detail_image);
+
+    // --- Cámara minimapa - Layer 1 (renderiza a textura) ---
+    let minimap_camera = commands
+        .spawn((
+            Camera2d,
+            Camera {
+                order: -2, // Renderiza antes que la principal
+                target: RenderTarget::Image(minimap_image_handle.clone().into()),
+                clear_color: ClearColorConfig::Custom(Color::srgb(0.1, 0.3, 0.1)),
+                ..default()
+            },
+            Projection::Orthographic(OrthographicProjection {
+                scaling_mode: ScalingMode::Fixed {
+                    width: config.arena_width,
+                    height: config.arena_height,
+                },
+                ..OrthographicProjection::default_2d()
+            }),
+            Transform::from_xyz(0.0, 0.0, 999.0),
+            MinimapCamera,
+            RenderLayers::layer(1),
+        ))
+        .id();
+
+    // --- Cámara Detalle Jugador - Layer 2 (renderiza a textura) ---
+    let detail_camera = commands
+        .spawn((
+            Camera2d,
+            Camera {
+                order: -1, // Renderiza antes que la principal
+                target: RenderTarget::Image(detail_image_handle.clone().into()),
+                clear_color: ClearColorConfig::Custom(Color::srgb(0.2, 0.2, 0.2)),
+                ..default()
+            },
+            Projection::Orthographic(OrthographicProjection {
+                scale: 1.5,
+                ..OrthographicProjection::default_2d()
+            }),
+            Transform::from_xyz(0.0, 0.0, 999.0),
+            PlayerDetailCamera,
+            RenderLayers::layer(2),
+        ))
+        .id();
+
+    // --- UI con ViewportNodes ---
+    // Contenedor raíz para posicionar los viewports
+    commands
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::End,
+                padding: UiRect::all(Val::Px(15.0)),
+                ..default()
+            },
+            // No bloquear clicks en el juego
+            Pickable::IGNORE,
+        ))
+        .with_children(|parent| {
+            // Espaciador izquierdo (para centrar el minimapa)
+            parent.spawn((
+                Node {
+                    width: Val::Px(200.0), // Mismo ancho que el detalle
+                    height: Val::Px(200.0),
+                    ..default()
+                },
+                Visibility::Hidden,
+            ));
+
+            // Minimapa (centro abajo)
+            parent.spawn((
+                Node {
+                    width: Val::Px(minimap_size.x as f32),
+                    height: Val::Px(minimap_size.y as f32),
+                    border: UiRect::all(Val::Px(3.0)),
+                    ..default()
+                },
+                BorderColor::all(Color::WHITE),
+                BorderRadius::all(Val::Px(4.0)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+                ViewportNode::new(minimap_camera),
+            ));
+
+            // Detalle del jugador (derecha abajo) - circular
+            parent.spawn((
+                Node {
+                    width: Val::Px(detail_size.x as f32),
+                    height: Val::Px(detail_size.y as f32),
+                    border: UiRect::all(Val::Px(3.0)),
+                    ..default()
+                },
+                BorderColor::all(Color::WHITE),
+                BorderRadius::all(Val::Percent(50.0)), // Circular
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+                ViewportNode::new(detail_camera),
+            ));
+        });
 
     // El Campo de Juego (Césped) - Color verde de RustBall - Layer 0
     commands.spawn((
@@ -2306,40 +2401,6 @@ fn camera_zoom_control(
     }
 }
 
-use bevy::camera::Viewport;
-
-fn update_camera_viewports(
-    windows: Query<&Window>,
-    mut minimap_q: Query<&mut Camera, (With<MinimapCamera>, Without<PlayerDetailCamera>)>,
-    mut detail_q: Query<&mut Camera, (With<PlayerDetailCamera>, Without<MinimapCamera>)>,
-) {
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let width = window.resolution.physical_width();
-    let height = window.resolution.physical_height();
-
-    // Minimapa: 300x180 px, centrado horizontalmente abajo
-    if let Ok(mut cam) = minimap_q.single_mut() {
-        let size = UVec2::new(300, 180);
-        cam.viewport = Some(Viewport {
-            physical_position: UVec2::new((width / 2) - (size.x / 2), height - size.y - 15),
-            physical_size: size,
-            depth: 0.0..1.0,
-        });
-    }
-
-    // Detalle Jugador: 200x200 px, abajo a la derecha
-    if let Ok(mut cam) = detail_q.single_mut() {
-        let size = UVec2::new(200, 200);
-        cam.viewport = Some(Viewport {
-            physical_position: UVec2::new(width - size.x - 15, height - size.y - 15),
-            physical_size: size,
-            depth: 0.0..1.0,
-        });
-    }
-}
-
 fn update_charge_bar(
     player_query: Query<(&RemotePlayer, &Children)>,
     // Una sola query mutable para el Sprite evita el conflicto B0001
@@ -2909,52 +2970,6 @@ fn cleanup_minimap_dots(
             commands.entity(dot_entity).despawn();
         }
     }
-}
-
-/// Dibuja un marco alrededor del minimapa usando egui
-fn draw_minimap_frame(mut contexts: EguiContexts, windows: Query<&Window>) {
-    let Ok(window) = windows.single() else {
-        return;
-    };
-
-    let Ok(ctx) = contexts.ctx_mut() else {
-        return;
-    };
-
-    // Dimensiones del minimapa (mismas que en update_camera_viewports)
-    let minimap_width = 300.0;
-    let minimap_height = 180.0;
-    let margin = 15.0;
-    let frame_thickness = 3.0;
-
-    // Posición del minimapa (centrado horizontalmente, abajo)
-    let window_width = window.width();
-    let window_height = window.height();
-    let minimap_x = (window_width - minimap_width) / 2.0;
-    let minimap_y = window_height - minimap_height - margin;
-
-    // Dibujar marco usando egui::Area
-    egui::Area::new(egui::Id::new("minimap_frame"))
-        .fixed_pos(egui::pos2(
-            minimap_x - frame_thickness,
-            minimap_y - frame_thickness,
-        ))
-        .order(egui::Order::Background)
-        .show(ctx, |ui| {
-            let frame_size = egui::vec2(
-                minimap_width + frame_thickness * 2.0,
-                minimap_height + frame_thickness * 2.0,
-            );
-
-            // Marco con borde blanco y fondo semitransparente
-            egui::Frame::new()
-                .fill(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 180))
-                .stroke(egui::Stroke::new(2.0, egui::Color32::WHITE))
-                .corner_radius(4.0)
-                .show(ui, |ui| {
-                    ui.allocate_space(frame_size);
-                });
-        });
 }
 
 /// Actualiza el fondo de la cámara de detalle al color complementario del equipo del jugador
