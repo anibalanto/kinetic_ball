@@ -1,5 +1,8 @@
 use super::map::Map;
-use bevy::prelude::{Component, Vec2};
+use bevy::{
+    math::UVec2,
+    prelude::{Component, Vec2},
+};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -237,6 +240,11 @@ pub struct GameConfig {
     pub slide_punch_force: f32,
     pub slide_max_torque: f32,
 
+    //ViewPorts
+    pub minimap_size: UVec2,
+    pub player_detail_size: UVec2,
+    pub ui_padding: f32,
+
     // Map loading
     #[serde(default)]
     pub map_path: Option<String>,
@@ -298,6 +306,10 @@ impl Default for GameConfig {
             speed_slide_coefficient: 2.0,
             slide_punch_force: 300000.0,
             slide_max_torque: 1000.0,
+
+            minimap_size: UVec2::new(300, 180),
+            player_detail_size: UVec2::new(180, 180),
+            ui_padding: 15.0,
 
             // Map loading
             map_path: None,

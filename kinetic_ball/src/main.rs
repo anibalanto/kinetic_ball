@@ -355,7 +355,7 @@ fn main() {
                 adjust_field_for_map,
                 interpolate_entities,
                 keep_name_horizontal,
-                camera_follow_player,
+                camera_follow_player_and_ball,
                 camera_zoom_control,
                 update_charge_bar,
                 update_player_sprite,
@@ -1541,8 +1541,9 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
     ));
 
     // --- Crear texturas de render target para ViewportNodes ---
-    let minimap_size = UVec2::new(300, 180);
-    let detail_size = UVec2::new(200, 200);
+
+    let minimap_size = config.minimap_size;
+    let detail_size = config.player_detail_size;
 
     // Textura para minimapa
     let mut minimap_image = Image::new_uninit(
@@ -1626,7 +1627,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
                 height: Val::Percent(100.0),
                 justify_content: JustifyContent::SpaceBetween,
                 align_items: AlignItems::End,
-                padding: UiRect::all(Val::Px(15.0)),
+                padding: UiRect::all(Val::Px(config.ui_padding)),
                 ..default()
             },
             // No bloquear clicks en el juego
@@ -2364,8 +2365,18 @@ fn interpolate_entities(time: Res<Time>, mut q: Query<(&mut Transform, &Interpol
     }
 }
 
-fn camera_follow_player(
+fn camera_follow_player_and_ball(
     my_player_id: Res<MyPlayerId>,
+    config: Res<GameConfig>,
+    ball_query: Query<
+        &Transform,
+        (
+            With<RemoteBall>,
+            Without<MainCamera>,
+            Without<MinimapCamera>,
+            Without<PlayerDetailCamera>,
+        ),
+    >,
     players: Query<
         (&RemotePlayer, &Transform),
         (
@@ -2379,26 +2390,71 @@ fn camera_follow_player(
         Query<&mut Transform, With<MinimapCamera>>,
         Query<&mut Transform, With<PlayerDetailCamera>>,
     )>,
+    time: Res<Time>,
+    windows: Query<&Window>,
 ) {
     let Some(my_id) = my_player_id.0 else { return };
+    let Some(window) = windows.iter().next() else {
+        return;
+    };
 
-    // Buscamos la posición de nuestro jugador
     let player_pos = players
         .iter()
         .find(|(p, _)| p.id == my_id)
         .map(|(_, t)| t.translation);
 
-    if let Some(pos) = player_pos {
-        // 1. Cámara principal sigue al jugador
-        if let Ok(mut cam) = cameras.p0().single_mut() {
-            cam.translation.x = pos.x;
-            cam.translation.y = pos.y;
+    if let Some(p_pos) = player_pos {
+        let ball_pos = ball_query
+            .iter()
+            .next()
+            .map(|t| t.translation)
+            .unwrap_or(p_pos);
+
+        // 1. Objetivo base
+        let target_pos = p_pos.lerp(ball_pos, 0.65);
+
+        // 2. Límites de cámara (Rectángulo de libertad)
+        // Recordatorio: +Y es ARRIBA, -Y es ABAJO.
+
+        // Si la UI está ABAJO, queremos que la cámara no suba tanto (limit_up pequeño)
+        // para que el jugador no baje hacia la zona de la UI.
+        let limit_up = 120.0; // Restringido: evita que el jugador caiga hacia la UI inferior
+        let limit_down = 400.0; // Libertad: el jugador puede subir en la pantalla sin problemas
+
+        let limit_left = 450.0; // Libertad total izquierda
+        let limit_right = 200.0; // Restringido por el Player Detail (derecha abajo)
+
+        // 3. Clamping asimétrico corregido
+        let mut final_target = target_pos;
+        let diff = target_pos - p_pos;
+
+        // Eje X
+        if diff.x > limit_right {
+            final_target.x = p_pos.x + limit_right;
+        } else if diff.x < -limit_left {
+            final_target.x = p_pos.x - limit_left;
         }
 
-        // 3. Detalle del jugador sigue al jugador (siempre centrado en él)
-        if let Ok(mut cam) = cameras.p2().single_mut() {
-            cam.translation.x = pos.x;
-            cam.translation.y = pos.y;
+        // Eje Y (Corregido: limit_up controla cuánto sube la cámara relativo al player)
+        if diff.y > limit_up {
+            final_target.y = p_pos.y + limit_up;
+        } else if diff.y < -limit_down {
+            final_target.y = p_pos.y - limit_down;
+        }
+
+        // 4. Aplicar movimiento suavizado
+        let delta = time.delta_secs();
+        let smoothing = 10.0;
+
+        if let Some(mut cam_t) = cameras.p0().iter_mut().next() {
+            cam_t.translation.x += (final_target.x - cam_t.translation.x) * smoothing * delta;
+            cam_t.translation.y += (final_target.y - cam_t.translation.y) * smoothing * delta;
+        }
+
+        // 5. Cámara Detalle
+        if let Some(mut cam_t) = cameras.p2().iter_mut().next() {
+            cam_t.translation.x = p_pos.x;
+            cam_t.translation.y = p_pos.y;
         }
     }
 }
