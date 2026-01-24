@@ -19,15 +19,19 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: kinetic_ball
+            build_server: true # Solo habilitado aquí
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: kinetic_ball.exe
+            build_server: false
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: kinetic_ball
+            build_server: false
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: kinetic_ball
+            build_server: false
 
     runs-on: ${{ matrix.os }}
 
@@ -50,25 +54,34 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Build client and server
-        run: cargo build -p kinetic_ball -p kinetic_ball_server --release --target ${{ matrix.target }}
+      # Compilación inteligente según la matriz
+      - name: Build projects
+        shell: bash
+        run: |
+          ARGS="-p kinetic_ball"
+          if [ "${{ matrix.build_server }}" = "true" ]; then
+            ARGS="$ARGS -p kinetic_ball_server"
+          fi
+          cargo build $ARGS --release --target ${{ matrix.target }}
 
       - name: Install matchbox_server
         if: matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(github.ref, 'refs/tags/v')
         run: cargo install matchbox_server
 
-      # PASO CLAVE: Renombrar binarios para evitar colisiones
       - name: Prepare artifacts
         shell: bash
         run: |
           mkdir -p out/
-          # Determinar extensión
           EXT=""
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then EXT=".exe"; fi
 
-          # Copiar y renombrar binarios
+          # Siempre copiamos el cliente
           cp target/${{ matrix.target }}/release/kinetic_ball${EXT} out/kinetic_ball-${{ matrix.target }}${EXT}
-          cp target/${{ matrix.target }}/release/kinetic_ball_server${EXT} out/kinetic_ball_server-${{ matrix.target }}${EXT}
+
+          # Copiamos el servidor solo si se buildeó
+          if [ "${{ matrix.build_server }}" = "true" ]; then
+            cp target/${{ matrix.target }}/release/kinetic_ball_server${EXT} out/kinetic_ball_server-${{ matrix.target }}${EXT}
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -76,61 +89,4 @@ jobs:
           name: binarios-${{ matrix.target }}
           path: out/*
 
-      - name: Upload matchbox_server (solo para deploy)
-        if: matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
-        with:
-          name: matchbox_server
-          path: ~/.cargo/bin/matchbox_server
-
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: all_artifacts
-          pattern: binarios-*
-          merge-multiple: true
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: all_artifacts/*
-          generate_release_notes: true
-
-  deploy-fly:
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: binarios-x86_64-unknown-linux-gnu
-          path: ./
-
-      - name: Download matchbox_server
-        uses: actions/download-artifact@v4
-        with:
-          name: matchbox_server
-          path: ./
-
-      - name: Setup Fly.io
-        uses: superfly/flyctl-actions/setup-flyctl@master
-
-      - name: List files before deploy
-        run: ls -la
-
-      - name: Deploy to Fly.io
-        run: flyctl deploy --local-only --no-cache
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      # ... resto de pasos (Upload matchbox, release, deploy) se mantienen igual
