@@ -365,7 +365,6 @@ fn main() {
                 spawn_minimap_dots,
                 sync_minimap_dots,
                 cleanup_minimap_dots,
-                update_detail_camera_background,
                 animate_keys,
             )
                 .run_if(in_state(AppState::InGame)),
@@ -1582,7 +1581,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
             Camera {
                 order: -2, // Renderiza antes que la principal
                 target: RenderTarget::Image(minimap_image_handle.clone().into()),
-                clear_color: ClearColorConfig::Custom(Color::srgb(0.1, 0.3, 0.1)),
+                clear_color: ClearColorConfig::Custom(Color::srgba(0.1, 0.3, 0.1, 0.6)),
                 ..default()
             },
             Projection::Orthographic(OrthographicProjection {
@@ -1605,7 +1604,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
             Camera {
                 order: -1, // Renderiza antes que la principal
                 target: RenderTarget::Image(detail_image_handle.clone().into()),
-                clear_color: ClearColorConfig::Custom(Color::srgb(0.2, 0.2, 0.2)),
+                clear_color: ClearColorConfig::Custom(Color::srgba(0.2, 0.2, 0.2, 0.6)),
                 ..default()
             },
             Projection::Orthographic(OrthographicProjection {
@@ -1654,7 +1653,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
                 },
                 BorderColor::all(Color::WHITE),
                 BorderRadius::all(Val::Px(4.0)),
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
                 ViewportNode::new(minimap_camera),
             ));
 
@@ -1668,7 +1667,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
                 },
                 BorderColor::all(Color::WHITE),
                 BorderRadius::all(Val::Percent(50.0)), // Circular
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
                 ViewportNode::new(detail_camera),
             ));
         });
@@ -1685,91 +1684,7 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
         RenderLayers::layer(0),
     ));
 
-    // Fondo del campo para minimapa - Layer 1 (verde más oscuro)
-    commands.spawn((
-        Sprite {
-            color: Color::srgb(0.1, 0.3, 0.1), // Verde más oscuro para minimapa
-            custom_size: Some(Vec2::new(config.arena_width, config.arena_height)),
-            ..default()
-        },
-        Transform::from_xyz(0.0, 0.0, -10.0),
-        MinimapFieldBackground,
-        RenderLayers::layer(1),
-    ));
-
-    // Líneas simplificadas del campo para minimapa - Layer 1
-    let minimap_line_thickness = 8.0;
-    let minimap_line_color = Color::srgba(1.0, 1.0, 1.0, 0.6);
-    let mw = config.arena_width;
-    let mh = config.arena_height;
-
-    // Borde superior - minimapa
-    commands.spawn((
-        Sprite {
-            color: minimap_line_color,
-            custom_size: Some(Vec2::new(
-                mw + minimap_line_thickness,
-                minimap_line_thickness,
-            )),
-            ..default()
-        },
-        Transform::from_xyz(0.0, mh / 2.0, 0.0),
-        MinimapFieldLine,
-        RenderLayers::layer(1),
-    ));
-    // Borde inferior - minimapa
-    commands.spawn((
-        Sprite {
-            color: minimap_line_color,
-            custom_size: Some(Vec2::new(
-                mw + minimap_line_thickness,
-                minimap_line_thickness,
-            )),
-            ..default()
-        },
-        Transform::from_xyz(0.0, -mh / 2.0, 0.0),
-        MinimapFieldLine,
-        RenderLayers::layer(1),
-    ));
-    // Borde izquierdo - minimapa
-    commands.spawn((
-        Sprite {
-            color: minimap_line_color,
-            custom_size: Some(Vec2::new(
-                minimap_line_thickness,
-                mh + minimap_line_thickness,
-            )),
-            ..default()
-        },
-        Transform::from_xyz(-mw / 2.0, 0.0, 0.0),
-        MinimapFieldLine,
-        RenderLayers::layer(1),
-    ));
-    // Borde derecho - minimapa
-    commands.spawn((
-        Sprite {
-            color: minimap_line_color,
-            custom_size: Some(Vec2::new(
-                minimap_line_thickness,
-                mh + minimap_line_thickness,
-            )),
-            ..default()
-        },
-        Transform::from_xyz(mw / 2.0, 0.0, 0.0),
-        MinimapFieldLine,
-        RenderLayers::layer(1),
-    ));
-    // Línea central vertical - minimapa
-    commands.spawn((
-        Sprite {
-            color: minimap_line_color,
-            custom_size: Some(Vec2::new(minimap_line_thickness, mh)),
-            ..default()
-        },
-        Transform::from_xyz(0.0, 0.0, 0.0),
-        MinimapFieldLine,
-        RenderLayers::layer(1),
-    ));
+    // Las líneas del minimapa se crean dinámicamente cuando se carga el mapa
     // Líneas blancas del campo (bordes)
     let thickness = 5.0;
     let w = config.arena_width;
@@ -2405,7 +2320,7 @@ fn camera_follow_player_and_ball(
     windows: Query<&Window>,
 ) {
     let Some(my_id) = my_player_id.0 else { return };
-    let Some(window) = windows.iter().next() else {
+    let Some(_) = windows.iter().next() else {
         return;
     };
 
@@ -2727,15 +2642,26 @@ fn adjust_field_for_map(
     mut default_lines: Query<&mut Visibility, With<DefaultFieldLine>>,
     mut field_bg: Query<
         (&mut Sprite, &mut Transform),
-        (With<FieldBackground>, Without<DefaultFieldLine>),
+        (
+            With<FieldBackground>,
+            Without<DefaultFieldLine>,
+            Without<MinimapFieldBackground>,
+        ),
     >,
+    mut minimap_bg: Query<&mut Sprite, (With<MinimapFieldBackground>, Without<FieldBackground>)>,
+    mut minimap_camera: Query<&mut Projection, With<MinimapCamera>>,
     map_lines: Query<Entity, With<MapLineEntity>>,
+    minimap_lines: Query<Entity, With<MinimapFieldLine>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     if loaded_map.is_changed() {
         // Eliminar líneas del mapa anterior
         for entity in map_lines.iter() {
+            commands.entity(entity).despawn();
+        }
+        // Eliminar líneas del minimapa anterior
+        for entity in minimap_lines.iter() {
             commands.entity(entity).despawn();
         }
 
@@ -2750,9 +2676,38 @@ fn adjust_field_for_map(
             let height = map.height.or(map.bg.height);
 
             if let (Some(w), Some(h)) = (width, height) {
+                // Campo principal
                 if let Ok((mut sprite, _transform)) = field_bg.single_mut() {
                     sprite.custom_size = Some(Vec2::new(w, h));
                     println!("🎨 Campo ajustado a dimensiones del mapa: {}x{}", w, h);
+                }
+                // Fondo del minimapa
+                if let Ok(mut minimap_sprite) = minimap_bg.single_mut() {
+                    minimap_sprite.custom_size = Some(Vec2::new(w, h));
+                }
+                // Proyección de la cámara del minimapa
+                // Ajustar para que el mapa llene el minimapa (300x180), 2x más cerca
+                if let Ok(mut projection) = minimap_camera.single_mut() {
+                    let minimap_aspect = 300.0 / 180.0; // aspect ratio del minimapa
+                    let map_aspect = w / h;
+                    let zoom = 0.5; // 2x más cerca
+
+                    let (cam_w, cam_h) = if map_aspect > minimap_aspect {
+                        // Mapa más ancho: el ancho define la escala
+                        (w * zoom, w / minimap_aspect * zoom)
+                    } else {
+                        // Mapa más alto: la altura define la escala
+                        (h * minimap_aspect * zoom, h * zoom)
+                    };
+
+                    *projection = Projection::Orthographic(OrthographicProjection {
+                        scaling_mode: ScalingMode::Fixed {
+                            width: cam_w,
+                            height: cam_h,
+                        },
+                        ..OrthographicProjection::default_2d()
+                    });
+                    println!("🗺️  Cámara minimapa ajustada a: {}x{}", cam_w, cam_h);
                 }
             } else {
                 println!("⚠️  Mapa sin dimensiones definidas, usando tamaño por defecto");
@@ -2760,6 +2715,8 @@ fn adjust_field_for_map(
 
             // Crear líneas del mapa como sprites
             spawn_map_lines(&mut commands, map, &mut meshes, &mut materials);
+            // Crear líneas del minimapa
+            spawn_minimap_lines(&mut commands, map);
         } else {
             // No hay mapa: mostrar líneas por defecto
             for mut visibility in default_lines.iter_mut() {
@@ -2852,6 +2809,85 @@ fn spawn_map_lines(
         let pos = Vec2::new(disc.pos[0], disc.pos[1]);
         spawn_circle_outline(commands, meshes, materials, pos, disc.radius, disc_color);
     }
+}
+
+// Constantes para el minimapa
+const MINIMAP_LINE_Z: f32 = 0.0;
+
+// Crea sprites para las líneas del minimapa (layer 1)
+fn spawn_minimap_lines(commands: &mut Commands, map: &shared::map::Map) {
+    let line_color = Color::srgba(1.0, 1.0, 1.0, 0.7);
+
+    // Calcular grosor proporcional al tamaño del mapa
+    // Para que las líneas se vean de ~3px en un minimapa de 300px
+    let map_width = map.width.or(map.bg.width).unwrap_or(1000.0);
+    let line_thickness = map_width / 200.0; // ~0.5% del ancho del mapa
+
+    // Dibujar segmentos visibles
+    for segment in &map.segments {
+        if !segment.is_visible() {
+            continue;
+        }
+
+        if segment.v0 >= map.vertexes.len() || segment.v1 >= map.vertexes.len() {
+            continue;
+        }
+
+        let v0 = &map.vertexes[segment.v0];
+        let v1 = &map.vertexes[segment.v1];
+
+        let p0 = Vec2::new(v0.x, v0.y);
+        let p1 = Vec2::new(v1.x, v1.y);
+
+        let curve_factor = segment.curve.or(segment.curve_f).unwrap_or(0.0);
+
+        if curve_factor.abs() < 0.01 {
+            // Segmento recto
+            spawn_minimap_line_segment(commands, p0, p1, line_color, line_thickness);
+        } else {
+            // Segmento curvo - aproximar con múltiples líneas
+            let points = approximate_curve_for_rendering(p0, p1, curve_factor, 16);
+            for i in 0..points.len() - 1 {
+                spawn_minimap_line_segment(
+                    commands,
+                    points[i],
+                    points[i + 1],
+                    line_color,
+                    line_thickness,
+                );
+            }
+        }
+    }
+}
+
+// Crea un sprite rectangular para el minimapa (layer 1)
+fn spawn_minimap_line_segment(
+    commands: &mut Commands,
+    p0: Vec2,
+    p1: Vec2,
+    color: Color,
+    thickness: f32,
+) {
+    let delta = p1 - p0;
+    let length = delta.length();
+    if length < 0.01 {
+        return;
+    }
+
+    let midpoint = (p0 + p1) * 0.5;
+    let angle = delta.y.atan2(delta.x);
+
+    commands.spawn((
+        Sprite {
+            color,
+            custom_size: Some(Vec2::new(length, thickness)),
+            ..default()
+        },
+        Transform::from_xyz(midpoint.x, midpoint.y, MINIMAP_LINE_Z)
+            .with_rotation(Quat::from_rotation_z(angle)),
+        MinimapFieldLine,
+        RenderLayers::layer(1),
+    ));
 }
 
 // Crea un sprite rectangular para representar una línea
@@ -3025,9 +3061,9 @@ fn spawn_minimap_dots(
 
         let dot_color = Color::srgb(team_color.0, team_color.1, team_color.2);
 
-        // Círculo de 80px para jugadores (4x más grande para minimapa)
+        // Círculo de 120px para jugadores
         commands.spawn((
-            Mesh2d(meshes.add(Circle::new(80.0))),
+            Mesh2d(meshes.add(Circle::new(120.0))),
             MeshMaterial2d(materials.add(dot_color)),
             Transform::from_xyz(0.0, 0.0, 10.0),
             MinimapDot {
@@ -3043,9 +3079,9 @@ fn spawn_minimap_dots(
             continue;
         }
 
-        // Círculo de 60px blanco para pelota (4x más grande para minimapa)
+        // Círculo de 80px blanco para pelota
         commands.spawn((
-            Mesh2d(meshes.add(Circle::new(60.0))),
+            Mesh2d(meshes.add(Circle::new(80.0))),
             MeshMaterial2d(materials.add(Color::WHITE)),
             Transform::from_xyz(0.0, 0.0, 11.0),
             MinimapDot {
@@ -3080,36 +3116,6 @@ fn cleanup_minimap_dots(
         if entities.get(dot.tracks_entity).is_err() {
             commands.entity(dot_entity).despawn();
         }
-    }
-}
-
-/// Actualiza el fondo de la cámara de detalle al color complementario del equipo del jugador
-fn update_detail_camera_background(
-    my_player_id: Res<MyPlayerId>,
-    config: Res<GameConfig>,
-    players: Query<&RemotePlayer>,
-    mut camera_q: Query<&mut Camera, With<PlayerDetailCamera>>,
-) {
-    let Some(my_id) = my_player_id.0 else { return };
-
-    // Buscar mi jugador para obtener el team_index
-    let Some(my_player) = players.iter().find(|p| p.id == my_id) else {
-        return;
-    };
-
-    // Obtener color del equipo
-    let team_color = config
-        .team_colors
-        .get(my_player.team_index as usize)
-        .copied()
-        .unwrap_or((0.5, 0.5, 0.5));
-
-    // Calcular color complementario
-    let (r, g, b) = complementary_color(team_color.0, team_color.1, team_color.2);
-
-    // Actualizar clear_color de la cámara
-    if let Ok(mut cam) = camera_q.single_mut() {
-        cam.clear_color = ClearColorConfig::Custom(Color::srgb(r, g, b));
     }
 }
 
