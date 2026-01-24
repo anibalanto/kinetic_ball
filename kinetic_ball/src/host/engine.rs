@@ -2,15 +2,15 @@
 // SISTEMAS DE FÍSICA DEL JUEGO
 // ============================================================================
 
-use bevy::prelude::*;
-use bevy_rapier2d::prelude::*;
-use matchbox_socket::PeerId;
 use crate::shared::movements::{get_movement, movement_ids};
 use crate::shared::protocol::PlayerMovement;
 use crate::shared::{GameConfig, TICK_RATE};
+use bevy::prelude::*;
+use bevy_rapier2d::prelude::*;
+use matchbox_socket::PeerId;
 
-use super::input::GameAction;
 use super::host::{Ball, GameInputManager, GameTick, Player, SlideCube, Sphere};
+use super::input::GameAction;
 use crate::host::map::converter::MapConverter;
 use crate::host::map::loader;
 use rand::Rng;
@@ -90,7 +90,7 @@ pub fn spawn_physics(
 
     let slide_cube_entity = commands
         .spawn((
-            SlideCube { owner_id: id },
+            SlideCube {},
             Transform::from_xyz(spawn_x + cube_offset.x, spawn_y + cube_offset.y, 0.0)
                 .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4))
                 .with_scale(Vec3::splat(1.0)),

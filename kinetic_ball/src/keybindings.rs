@@ -424,20 +424,3 @@ pub fn load_app_config() -> AppConfig {
         }
     }
 }
-
-pub fn save_app_config(config: &AppConfig) -> Result<(), String> {
-    let config_dir = get_config_dir().ok_or("No se pudo determinar directorio de config")?;
-
-    fs::create_dir_all(&config_dir)
-        .map_err(|e| format!("Error creando directorio de config: {}", e))?;
-
-    let path = config_dir.join("config.ron");
-
-    let content = ron::ser::to_string_pretty(config, ron::ser::PrettyConfig::default())
-        .map_err(|e| format!("Error serializando config: {}", e))?;
-
-    fs::write(&path, content).map_err(|e| format!("Error escribiendo archivo: {}", e))?;
-
-    println!("[Config] App config guardado en {:?}", path);
-    Ok(())
-}

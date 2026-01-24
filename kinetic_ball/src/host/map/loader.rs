@@ -1,6 +1,5 @@
 use crate::shared::map::Map;
-use std::path::{Path, PathBuf};
-use std::fs;
+use std::path::Path;
 
 #[derive(Debug)]
 pub enum MapLoadError {
@@ -26,8 +25,8 @@ pub fn load_map<P: AsRef<Path>>(path: P) -> Result<Map, MapLoadError> {
     let path_str = path.as_ref().to_string_lossy().to_string();
 
     // Leer archivo
-    let content = std::fs::read_to_string(&path)
-        .map_err(|_| MapLoadError::FileNotFound(path_str.clone()))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|_| MapLoadError::FileNotFound(path_str.clone()))?;
 
     load_map_from_str(&content, &path_str)
 }
@@ -61,7 +60,10 @@ fn validate_map(map: &Map) -> Result<(), MapLoadError> {
         if seg.v0 >= map.vertexes.len() || seg.v1 >= map.vertexes.len() {
             return Err(MapLoadError::InvalidGeometry(format!(
                 "Segment {} references invalid vertex (v0={}, v1={}, total vertices={})",
-                i, seg.v0, seg.v1, map.vertexes.len()
+                i,
+                seg.v0,
+                seg.v1,
+                map.vertexes.len()
             )));
         }
     }
@@ -77,25 +79,4 @@ fn validate_map(map: &Map) -> Result<(), MapLoadError> {
     }
 
     Ok(())
-}
-
-/// Listar todos los mapas disponibles en el directorio
-pub fn list_available_maps(maps_dir: &str) -> Vec<PathBuf> {
-    let mut maps = Vec::new();
-
-    if let Ok(entries) = fs::read_dir(maps_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    if ext == "hbs" || ext == "json" || ext == "json5" {
-                        maps.push(path);
-                    }
-                }
-            }
-        }
-    }
-
-    maps.sort();
-    maps
 }

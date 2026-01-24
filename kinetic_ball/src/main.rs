@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 
 mod keybindings;
 use keybindings::{
-    key_code_display_name, load_app_config, load_keybindings, save_app_config, save_keybindings,
-    AppConfig, GameAction, KeyBindingsConfig, SettingsUIState,
+    key_code_display_name, load_app_config, load_keybindings, save_keybindings, AppConfig,
+    GameAction, KeyBindingsConfig, SettingsUIState,
 };
 
 mod host;
@@ -29,7 +29,6 @@ mod shared;
 // ============================================================================
 
 const BALL_PNG: &[u8] = include_bytes!("../assets/ball.png");
-const EMOJI_FONT: &[u8] = include_bytes!("../assets/NotoColorEmoji_WindowsCompatible.ttf");
 const DEFAULT_MAP: &str = include_str!("../assets/cancha_grande.hbs");
 
 // ============================================================================
@@ -384,7 +383,6 @@ fn main() {
 #[derive(Resource, Default)]
 struct EmbeddedAssets {
     ball_texture: Handle<Image>,
-    emoji_font: Handle<Font>,
 }
 
 #[derive(Resource, Default)]
@@ -511,11 +509,7 @@ fn cleanup_menu_camera(mut commands: Commands, menu_camera: Query<Entity, With<M
 }
 
 /// Carga los assets embebidos en memoria al iniciar la aplicación
-fn load_embedded_assets(
-    mut commands: Commands,
-    mut images: ResMut<Assets<Image>>,
-    mut fonts: ResMut<Assets<Font>>,
-) {
+fn load_embedded_assets(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let ball_image = Image::from_buffer(
         BALL_PNG,
         ImageType::Extension("png"),
@@ -528,14 +522,8 @@ fn load_embedded_assets(
 
     let ball_handle = images.add(ball_image);
 
-    // Cargar fuente emoji
-    let emoji_font =
-        Font::try_from_bytes(EMOJI_FONT.to_vec()).expect("Failed to load embedded emoji font");
-    let emoji_font_handle = fonts.add(emoji_font);
-
     commands.insert_resource(EmbeddedAssets {
         ball_texture: ball_handle,
-        emoji_font: emoji_font_handle,
     });
 
     println!("✅ Assets embebidos cargados en memoria");
@@ -1100,7 +1088,6 @@ fn room_selection_ui(
 
 fn create_room_ui(
     mut contexts: EguiContexts,
-    mut config: ResMut<ConnectionConfig>,
     mut create_config: ResMut<CreateRoomConfig>,
     mut next_state: ResMut<NextState<AppState>>,
 ) {
@@ -3061,7 +3048,7 @@ fn update_detail_camera_background(
 
 fn animate_keys(
     keyboard_input: Res<ButtonInput<KeyCode>>,
-    mut key_query: Query<(&KeyVisual, &Children)>,
+    key_query: Query<(&KeyVisual, &Children)>,
     mut transform_query: Query<&mut Transform>,
     time: Res<Time>,
 ) {

@@ -85,11 +85,7 @@ pub fn host(
     let (outgoing_tx, outgoing_rx) = mpsc::channel();
 
     // Clonar loaded_map para usarlo en ambos lugares
-    let network_state = Arc::new(Mutex::new(NetworkState {
-        next_player_id: 1,
-        game_config: game_config.clone(),
-        map: loaded_map.clone(),
-    }));
+    let network_state = Arc::new(Mutex::new(NetworkState { next_player_id: 1 }));
 
     // Iniciar servidor WebRTC (se conecta al proxy)
     let room = room.clone();
@@ -279,9 +275,7 @@ pub struct Sphere;
 
 // Marker component para el cubo de dirección/slide
 #[derive(Component)]
-pub struct SlideCube {
-    pub owner_id: u32,
-}
+pub struct SlideCube {}
 
 #[derive(Component)]
 pub struct Ball {
@@ -294,8 +288,6 @@ pub struct Ball {
 
 pub struct NetworkState {
     pub next_player_id: u32,
-    pub game_config: GameConfig,
-    pub map: Option<crate::shared::map::Map>,
 }
 
 pub enum NetworkEvent {
@@ -371,24 +363,6 @@ fn setup_game(mut commands: Commands, config: Res<GameConfig>) {
         ExternalForce::default(),
         Ccd::enabled(),
     ));
-
-    // Intentar cargar mapa
-    let map_loaded = if let Some(map_path) = &config.map_path {
-        match super::map::load_map(map_path) {
-            Ok(haxball_map) => {
-                let converter = super::map::MapConverter::new();
-                converter.spawn_map_geometry(&mut commands, &haxball_map);
-                true
-            }
-            Err(e) => {
-                eprintln!("⚠️  Failed to load map: {}", e);
-                eprintln!("   Falling back to default walls");
-                false
-            }
-        }
-    } else {
-        false
-    };
 
     println!("✅ Juego configurado");
 }

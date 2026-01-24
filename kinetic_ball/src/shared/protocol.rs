@@ -242,10 +242,6 @@ pub struct GameConfig {
     pub map_path: Option<String>,
 }
 
-fn default_true() -> bool {
-    true
-}
-
 impl Default for GameConfig {
     fn default() -> Self {
         Self {

@@ -60,7 +60,11 @@ impl Keyframe {
     }
 
     pub fn with_easing(time: f32, value: f32, easing: EasingFunction) -> Self {
-        Self { time, value, easing }
+        Self {
+            time,
+            value,
+            easing,
+        }
     }
 }
 
@@ -145,7 +149,10 @@ impl Movement {
 
     /// Agrega un track de animación
     pub fn with_track(mut self, property: AnimatedProperty, keyframes: Vec<Keyframe>) -> Self {
-        self.tracks.push(AnimationTrack { property, keyframes });
+        self.tracks.push(AnimationTrack {
+            property,
+            keyframes,
+        });
         self
     }
 
@@ -190,88 +197,73 @@ pub fn get_movement(id: u8) -> Option<Movement> {
             // El cubo avanza, se agranda y rota 45° adicionales
             Movement::new(MovementTarget::DirectionCube, 0.15)
                 // Escala: 1.0 -> 3.0 con ease out
-                .with_track(AnimatedProperty::Scale, vec![
-                    Keyframe::new(0.0, 1.0),
-                    Keyframe::with_easing(1.0, 3.0, EaseOut),
-                ])
+                .with_track(
+                    AnimatedProperty::Scale,
+                    vec![
+                        Keyframe::new(0.0, 1.0),
+                        Keyframe::with_easing(1.0, 3.0, EaseOut),
+                    ],
+                )
                 // Avanza hacia adelante: base (0.7 * radius) -> 1.8 * radius
                 // El valor es multiplicador del radio del jugador
-                .with_track(AnimatedProperty::OffsetX, vec![
-                    Keyframe::new(0.0, 0.7),
-                    Keyframe::with_easing(1.0, 1.8, EaseOut),
-                ])
+                .with_track(
+                    AnimatedProperty::OffsetX,
+                    vec![
+                        Keyframe::new(0.0, 0.7),
+                        Keyframe::with_easing(1.0, 1.8, EaseOut),
+                    ],
+                )
                 // Rotación adicional: 0 -> 45° (PI/4)
-                .with_track(AnimatedProperty::Rotation, vec![
-                    Keyframe::new(0.0, 0.0),
-                    Keyframe::with_easing(1.0, std::f32::consts::FRAC_PI_4, EaseOut),
-                ])
+                .with_track(
+                    AnimatedProperty::Rotation,
+                    vec![
+                        Keyframe::new(0.0, 0.0),
+                        Keyframe::with_easing(1.0, std::f32::consts::FRAC_PI_4, EaseOut),
+                    ],
+                ),
         ),
 
         movement_ids::SLIDE_CUBE_SHRINK => Some(
             // El cubo retrocede, se achica y vuelve a su rotación original
             Movement::new(MovementTarget::DirectionCube, 0.2)
                 // Escala: 3.0 -> 1.0 con ease in
-                .with_track(AnimatedProperty::Scale, vec![
-                    Keyframe::new(0.0, 3.0),
-                    Keyframe::with_easing(1.0, 1.0, EaseIn),
-                ])
+                .with_track(
+                    AnimatedProperty::Scale,
+                    vec![
+                        Keyframe::new(0.0, 3.0),
+                        Keyframe::with_easing(1.0, 1.0, EaseIn),
+                    ],
+                )
                 // Retrocede: 1.8 -> 0.7
-                .with_track(AnimatedProperty::OffsetX, vec![
-                    Keyframe::new(0.0, 1.8),
-                    Keyframe::with_easing(1.0, 0.7, EaseIn),
-                ])
+                .with_track(
+                    AnimatedProperty::OffsetX,
+                    vec![
+                        Keyframe::new(0.0, 1.8),
+                        Keyframe::with_easing(1.0, 0.7, EaseIn),
+                    ],
+                )
                 // Rotación: 45° -> 0
-                .with_track(AnimatedProperty::Rotation, vec![
-                    Keyframe::new(0.0, std::f32::consts::FRAC_PI_4),
-                    Keyframe::with_easing(1.0, 0.0, EaseIn),
-                ])
+                .with_track(
+                    AnimatedProperty::Rotation,
+                    vec![
+                        Keyframe::new(0.0, std::f32::consts::FRAC_PI_4),
+                        Keyframe::with_easing(1.0, 0.0, EaseIn),
+                    ],
+                ),
         ),
 
         movement_ids::DIRECTION_PULSE => Some(
             // Un pulso rápido: crece y vuelve
-            Movement::new(MovementTarget::DirectionCube, 0.2)
-                .with_track(AnimatedProperty::Scale, vec![
+            Movement::new(MovementTarget::DirectionCube, 0.2).with_track(
+                AnimatedProperty::Scale,
+                vec![
                     Keyframe::new(0.0, 1.0),
-                    Keyframe::with_easing(0.5, 1.5, EaseOut),  // Crece hasta la mitad
-                    Keyframe::with_easing(1.0, 1.0, EaseIn),   // Vuelve al final
-                ])
+                    Keyframe::with_easing(0.5, 1.5, EaseOut), // Crece hasta la mitad
+                    Keyframe::with_easing(1.0, 1.0, EaseIn),  // Vuelve al final
+                ],
+            ),
         ),
 
         _ => None,
-    }
-}
-
-/// Estado de un movimiento en ejecución (para uso local, no requerido con sistema de ticks)
-#[derive(Debug, Clone)]
-pub struct ActiveMovement {
-    pub movement: Movement,
-    pub elapsed: f32,
-    pub player_id: u32,
-}
-
-impl ActiveMovement {
-    pub fn new(movement: Movement, player_id: u32) -> Self {
-        Self {
-            movement,
-            elapsed: 0.0,
-            player_id,
-        }
-    }
-
-    /// Avanza el tiempo y retorna el progreso normalizado (0.0 - 1.0)
-    /// El easing se aplica por cada track en Movement::evaluate()
-    pub fn tick(&mut self, delta: f32) -> f32 {
-        self.elapsed += delta;
-        (self.elapsed / self.movement.duration).min(1.0)
-    }
-
-    /// Retorna true si el movimiento ha terminado
-    pub fn is_finished(&self) -> bool {
-        self.elapsed >= self.movement.duration
-    }
-
-    /// Interpola un valor según el progreso
-    pub fn lerp(from: f32, to: f32, progress: f32) -> f32 {
-        from + (to - from) * progress
     }
 }

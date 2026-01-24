@@ -35,7 +35,6 @@ impl InputSource for NetworkInputSource {
             GameAction::StopInteract => self.current.stop_interact,
             GameAction::Sprint => self.current.sprint,
             GameAction::Mode => self.current.mode,
-            GameAction::Dash => self.previous.dash,
         }
     }
 
@@ -52,7 +51,6 @@ impl InputSource for NetworkInputSource {
             GameAction::StopInteract => self.previous.stop_interact,
             GameAction::Sprint => self.previous.sprint,
             GameAction::Mode => self.previous.mode,
-            GameAction::Dash => self.previous.dash,
         };
         current && !previous
     }
@@ -70,7 +68,6 @@ impl InputSource for NetworkInputSource {
             GameAction::StopInteract => self.previous.stop_interact,
             GameAction::Sprint => self.previous.sprint,
             GameAction::Mode => self.previous.mode,
-            GameAction::Dash => self.previous.dash,
         };
         !current && previous
     }
