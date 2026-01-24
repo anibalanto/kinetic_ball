@@ -189,7 +189,7 @@ pub struct KeyBindingsConfig {
     pub kick: SerializableKeyCode,
     pub curve_left: SerializableKeyCode,
     pub curve_right: SerializableKeyCode,
-    pub stop_interact: SerializableKeyCode,
+    pub wildcard: SerializableKeyCode, // StopInteract en modo normal, Dash en modo cubo
     pub sprint: SerializableKeyCode,
     pub mode: SerializableKeyCode,
 }
@@ -204,7 +204,7 @@ impl Default for KeyBindingsConfig {
             kick: SerializableKeyCode(KeyCode::KeyS),
             curve_left: SerializableKeyCode(KeyCode::KeyD),
             curve_right: SerializableKeyCode(KeyCode::KeyA),
-            stop_interact: SerializableKeyCode(KeyCode::ShiftLeft),
+            wildcard: SerializableKeyCode(KeyCode::ShiftLeft),
             sprint: SerializableKeyCode(KeyCode::Space),
             mode: SerializableKeyCode(KeyCode::ControlRight),
         }
@@ -224,7 +224,7 @@ pub enum GameAction {
     Kick,
     CurveLeft,
     CurveRight,
-    StopInteract,
+    Wildcard, // StopInteract en modo normal, Dash en modo cubo
     Sprint,
     Mode,
 }
@@ -239,7 +239,7 @@ impl GameAction {
             GameAction::Kick,
             GameAction::CurveLeft,
             GameAction::CurveRight,
-            GameAction::StopInteract,
+            GameAction::Wildcard,
             GameAction::Sprint,
             GameAction::Mode,
         ]
@@ -254,7 +254,7 @@ impl GameAction {
             GameAction::Kick => "Patear",
             GameAction::CurveLeft => "Curva Izquierda",
             GameAction::CurveRight => "Curva Derecha",
-            GameAction::StopInteract => "No interactuar",
+            GameAction::Wildcard => "Especial",
             GameAction::Sprint => "Sprint",
             GameAction::Mode => "Modo",
         }
@@ -271,7 +271,7 @@ impl KeyBindingsConfig {
             GameAction::Kick => self.kick.0,
             GameAction::CurveLeft => self.curve_left.0,
             GameAction::CurveRight => self.curve_right.0,
-            GameAction::StopInteract => self.stop_interact.0,
+            GameAction::Wildcard => self.wildcard.0,
             GameAction::Sprint => self.sprint.0,
             GameAction::Mode => self.mode.0,
         }
@@ -287,7 +287,7 @@ impl KeyBindingsConfig {
             GameAction::Kick => self.kick = key,
             GameAction::CurveLeft => self.curve_left = key,
             GameAction::CurveRight => self.curve_right = key,
-            GameAction::StopInteract => self.stop_interact = key,
+            GameAction::Wildcard => self.wildcard = key,
             GameAction::Sprint => self.sprint = key,
             GameAction::Mode => self.mode = key,
         }

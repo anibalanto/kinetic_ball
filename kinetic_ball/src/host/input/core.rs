@@ -11,9 +11,10 @@ pub enum GameAction {
     Kick,
     CurveLeft,
     CurveRight,
-    StopInteract, // Equivalente a Space/soltar la pelota
-    Sprint,       // Equivalente a Shift
-    Mode,         // Modo (toggle con un solo tap)
+    StopInteract,
+    Dash,
+    Sprint, // Correr
+    Mode,   // Modo cubo (toggle)
 }
 
 /// Trait que debe implementar cualquier fuente de input

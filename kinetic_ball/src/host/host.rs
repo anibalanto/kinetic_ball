@@ -266,7 +266,7 @@ pub struct Player {
     pub team_index: u8,
 
     // Mode (cubo grande, esfera chica)
-    pub mode_active: bool,
+    pub mode_cube_active: bool,
 }
 
 // Marker component para la entidad física del jugador

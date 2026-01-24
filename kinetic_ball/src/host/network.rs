@@ -318,7 +318,7 @@ pub fn broadcast_game_state(
                     stamin_charge: player.stamin,
                     active_movement: player.active_movement.clone(),
                     team_index: player.team_index,
-                    mode_active: player.mode_active,
+                    mode_cube_active: player.mode_cube_active,
                 })
             } else {
                 println!(

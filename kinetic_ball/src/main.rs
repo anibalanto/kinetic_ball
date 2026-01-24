@@ -433,7 +433,7 @@ struct RemotePlayer {
     ball_target_position: Option<Vec2>,
     stamin_charge: f32,
     active_movement: Option<PlayerMovement>,
-    mode_active: bool,
+    mode_cube_active: bool,
 }
 
 #[derive(Component)]
@@ -1838,17 +1838,28 @@ fn handle_input(
     my_player_id: Res<MyPlayerId>,
     mut previous_input: ResMut<PreviousInput>,
     keybindings: Res<KeyBindingsConfig>,
+    players: Query<&RemotePlayer>,
 ) {
-    if my_player_id.0.is_none() {
+    let Some(my_id) = my_player_id.0 else {
         return;
-    }
+    };
 
     let Some(ref sender) = channels.sender else {
         return;
     };
 
+    // Verificar si el jugador local está en modo cubo
+    let is_cube_mode = players
+        .iter()
+        .find(|p| p.id == my_id)
+        .map(|p| p.mode_cube_active)
+        .unwrap_or(false);
+
     // Detectar modificador (ControlLeft)
     let modifier = keyboard.pressed(KeyCode::ControlLeft);
+
+    // Tecla wildcard: StopInteract en modo normal, Dash en modo cubo
+    let wildcard_pressed = keyboard.pressed(keybindings.wildcard.0);
 
     // Mapeo de teclas configurable
     let input = PlayerInput {
@@ -1859,9 +1870,9 @@ fn handle_input(
         kick: keyboard.pressed(keybindings.kick.0) && !modifier,
         curve_left: keyboard.pressed(keybindings.curve_left.0),
         curve_right: keyboard.pressed(keybindings.curve_right.0),
-        stop_interact: keyboard.pressed(keybindings.stop_interact.0),
+        stop_interact: wildcard_pressed && !is_cube_mode,
+        dash: wildcard_pressed && is_cube_mode,
         sprint: keyboard.pressed(keybindings.sprint.0) && !modifier,
-        dash: modifier && keyboard.pressed(keybindings.sprint.0),
         mode: keyboard.pressed(keybindings.mode.0),
     };
 
@@ -2083,7 +2094,7 @@ fn process_network_messages(
                     rp.ball_target_position = ps.ball_target_position;
                     rp.stamin_charge = ps.stamin_charge;
                     rp.active_movement = ps.active_movement.clone();
-                    rp.mode_active = ps.mode_active;
+                    rp.mode_cube_active = ps.mode_cube_active;
 
                     found = true;
                     break;
@@ -2126,7 +2137,7 @@ fn process_network_messages(
                             ball_target_position: ps.ball_target_position,
                             stamin_charge: ps.stamin_charge,
                             active_movement: ps.active_movement.clone(),
-                            mode_active: ps.mode_active,
+                            mode_cube_active: ps.mode_cube_active,
                         },
                         Collider::ball(config.sphere_radius), // Para debug rendering
                         Interpolated {
@@ -2678,7 +2689,7 @@ fn update_mode_visuals(
                     continue;
                 }
 
-                if player.mode_active {
+                if player.mode_cube_active {
                     // Modo cubo: grande y centrado
                     cube_transform.scale = Vec3::splat(2.5);
                     cube_transform.translation.x = 0.0;
@@ -2697,7 +2708,7 @@ fn update_mode_visuals(
                     continue;
                 }
 
-                if player.mode_active {
+                if player.mode_cube_active {
                     // Modo cubo: esfera chica
                     sprite_transform.scale = Vec3::splat(0.3);
                 } else {

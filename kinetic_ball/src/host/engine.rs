@@ -123,7 +123,7 @@ pub fn spawn_physics(
         slide_cube_scale: 1.0,
         active_movement: None,
         team_index,
-        mode_active: false,
+        mode_cube_active: false,
     });
 
     println!("✅ Jugador {} spawneado: {}", id, name);
@@ -167,7 +167,7 @@ pub fn move_players(
 
                 // En modo cubo siempre corre, en modo normal depende de Sprint
                 let should_run =
-                    player.mode_active || game_input.is_pressed(player_id, GameAction::Sprint);
+                    player.mode_cube_active || game_input.is_pressed(player_id, GameAction::Sprint);
 
                 let move_coeficient = if should_run && player.stamin > run_stamin_cost {
                     player.stamin -= run_stamin_cost;
@@ -185,24 +185,24 @@ pub fn move_players(
     }
 }
 
-// Permite atravesar la pelota con Sprint
+// En modo cubo siempre atraviesa la pelota, en modo normal con StopInteract
 pub fn handle_collision_player(
     game_input: Res<GameInputManager>,
     mut player_query: Query<&mut Player>,
     mut sphere_query: Query<&mut SolverGroups, With<Sphere>>,
 ) {
     for mut player in player_query.iter_mut() {
-        let player_id = player.id;
-
-        let stop_interact = game_input.is_pressed(player_id, GameAction::StopInteract);
-        player.not_interacting = stop_interact;
+        // En modo cubo siempre ignora colisión, en modo normal solo con StopInteract
+        let should_ignore_ball =
+            player.mode_cube_active || game_input.is_pressed(player.id, GameAction::StopInteract);
+        player.not_interacting = should_ignore_ball;
 
         if let Ok(mut solver_groups) = sphere_query.get_mut(player.sphere) {
-            if game_input.is_pressed(player_id, GameAction::StopInteract) {
-                // Con Sprint: no respuesta física con pelota (GROUP_3), sí con jugadores (GROUP_4) y paredes
+            if should_ignore_ball {
+                // No respuesta física con pelota (GROUP_3), sí con jugadores (GROUP_4) y paredes
                 solver_groups.filters = Group::ALL ^ Group::GROUP_3;
             } else {
-                // Normal: respuesta física con todos
+                // Modo normal: respuesta física con todos
                 solver_groups.filters = Group::ALL;
             }
         }
@@ -219,7 +219,7 @@ pub fn charge_kick(
 ) {
     for mut player in players.iter_mut() {
         // No cargar kick en modo cubo
-        if player.mode_active {
+        if player.mode_cube_active {
             continue;
         }
 
@@ -264,7 +264,7 @@ pub fn charge_kick(
 pub fn prepare_kick_ball(game_input: Res<GameInputManager>, mut player_query: Query<&mut Player>) {
     for mut player in player_query.iter_mut() {
         // No preparar kick en modo cubo
-        if player.mode_active {
+        if player.mode_cube_active {
             continue;
         }
 
@@ -357,7 +357,7 @@ pub fn attract_ball(
 ) {
     for player in player_query.iter() {
         // No funciona en modo cubo
-        if player.mode_active {
+        if player.mode_cube_active {
             continue;
         }
 
@@ -368,57 +368,55 @@ pub fn attract_ball(
             continue;
         }
 
-        if !game_input.is_pressed(player_id, GameAction::StopInteract) {
-            if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
-                for (ball_transform, mut impulse, mut velocity) in ball_query.iter_mut() {
-                    let diff = player_transform.translation - ball_transform.translation;
-                    let distance = diff.truncate().length();
+        if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
+            for (ball_transform, mut impulse, mut velocity) in ball_query.iter_mut() {
+                let diff = player_transform.translation - ball_transform.translation;
+                let distance = diff.truncate().length();
 
-                    if player_velocity.linvel.length()
-                        > config.player_speed * (config.walk_coeficient + 0.1)
-                    {
-                        return;
-                    }
+                if player_velocity.linvel.length()
+                    > config.player_speed * (config.walk_coeficient + 0.1)
+                {
+                    return;
+                }
 
-                    // Radio de "pegado" - cuando está muy cerca, la pelota se queda pegada
-                    let stick_radius = config.sphere_radius + 40.0;
+                // Radio de "pegado" - cuando está muy cerca, la pelota se queda pegada
+                let stick_radius = config.sphere_radius + 40.0;
 
-                    if distance < stick_radius && distance > 1.0 {
-                        // Efecto pegado: frenar la pelota y atraerla suavemente
-                        let direction = diff.truncate().normalize_or_zero();
+                if distance < stick_radius && distance > 1.0 {
+                    // Efecto pegado: frenar la pelota y atraerla suavemente
+                    let direction = diff.truncate().normalize_or_zero();
 
-                        // Frenar la velocidad de la pelota (damping fuerte)
-                        velocity.linvel *= 0.85;
+                    // Frenar la velocidad de la pelota (damping fuerte)
+                    velocity.linvel *= 0.85;
 
-                        // Atracción suave hacia el jugador
-                        let stick_force = direction * 8000.0;
-                        impulse.impulse += stick_force;
-                    } else if distance < config.attract_max_distance
-                        && distance > config.attract_min_distance
-                    {
-                        let direction = diff.truncate().normalize_or_zero();
+                    // Atracción suave hacia el jugador
+                    let stick_force = direction * 8000.0;
+                    impulse.impulse += stick_force;
+                } else if distance < config.attract_max_distance
+                    && distance > config.attract_min_distance
+                {
+                    let direction = diff.truncate().normalize_or_zero();
 
-                        // Fuerza de atracción que aumenta cuando la pelota se acerca
-                        // pero no cuando ya está muy cerca (para evitar oscilaciones)
-                        let distance_factor = 1.0
-                            - (distance - config.attract_min_distance)
-                                / (config.attract_max_distance - config.attract_min_distance);
+                    // Fuerza de atracción que aumenta cuando la pelota se acerca
+                    // pero no cuando ya está muy cerca (para evitar oscilaciones)
+                    let distance_factor = 1.0
+                        - (distance - config.attract_min_distance)
+                            / (config.attract_max_distance - config.attract_min_distance);
 
-                        // Reducir la fuerza si la pelota ya se mueve hacia el jugador
-                        let current_velocity_toward_player = velocity.linvel.dot(direction);
-                        let velocity_factor = if current_velocity_toward_player > 0.0 {
-                            (1.0 - current_velocity_toward_player / 200.0).max(0.2)
-                        } else {
-                            1.0
-                        };
+                    // Reducir la fuerza si la pelota ya se mueve hacia el jugador
+                    let current_velocity_toward_player = velocity.linvel.dot(direction);
+                    let velocity_factor = if current_velocity_toward_player > 0.0 {
+                        (1.0 - current_velocity_toward_player / 200.0).max(0.2)
+                    } else {
+                        1.0
+                    };
 
-                        let attract_impulse = direction
-                            * config.attract_force
-                            * distance_factor
-                            * velocity_factor
-                            * 0.016; // ~1/60 para frame
-                        impulse.impulse += attract_impulse;
-                    }
+                    let attract_impulse = direction
+                        * config.attract_force
+                        * distance_factor
+                        * velocity_factor
+                        * 0.016; // ~1/60 para frame
+                    impulse.impulse += attract_impulse;
                 }
             }
         }
@@ -439,7 +437,7 @@ pub fn push_ball_on_contact(
 
     for player in player_query.iter() {
         // No funciona en modo cubo
-        if player.mode_active {
+        if player.mode_cube_active {
             continue;
         }
 
@@ -490,7 +488,7 @@ pub fn detect_contact_and_kick(
 
     for mut player in player_query.iter_mut() {
         // No aplicar kick en modo cubo
-        if player.mode_active {
+        if player.mode_cube_active {
             continue;
         }
 
@@ -524,15 +522,17 @@ pub fn detect_contact_and_kick(
     }
 }
 
-// Sistema para decrementar el timer de potencia memorizada y cancelar con StopInteract
+// Sistema para decrementar el timer de potencia memorizada
 pub fn update_kick_memory_timer(
     game_input: Res<GameInputManager>,
     time: Res<Time>,
     mut player_query: Query<&mut Player>,
 ) {
     for mut player in player_query.iter_mut() {
-        // Cancelar con StopInteract
-        if game_input.is_pressed(player.id, GameAction::StopInteract) {
+        // Cancelar en modo cubo o con StopInteract
+        if player.mode_cube_active
+            || game_input.is_pressed(player.id, GameAction::StopInteract)
+        {
             player.kick_charge = Vec2::ZERO;
             player.kick_memory_timer = 0.0;
             continue;
@@ -561,7 +561,7 @@ pub fn auto_touch_ball_while_running(
 
     for player in player_query.iter() {
         // No funciona en modo cubo
-        if player.mode_active {
+        if player.mode_cube_active {
             continue;
         }
 
@@ -570,9 +570,7 @@ pub fn auto_touch_ball_while_running(
             continue;
         }
 
-        if !game_input.is_pressed(player.id, GameAction::Sprint)
-            || game_input.is_pressed(player.id, GameAction::StopInteract)
-        {
+        if !game_input.is_pressed(player.id, GameAction::Sprint) || player.mode_cube_active {
             continue;
         }
 
@@ -612,12 +610,16 @@ fn changing_mode(
     println!(
         "🔄 Jugador {} modo: {}",
         player.id,
-        if player.mode_active { "CUBO" } else { "ESFERA" }
+        if player.mode_cube_active {
+            "CUBO"
+        } else {
+            "ESFERA"
+        }
     );
 
     // Cambiar física según el modo
 
-    if player.mode_active {
+    if player.mode_cube_active {
         // Modo CUBO: esfera chica, cubo grande con física
         commands
             .entity(sphere_entity)
@@ -673,7 +675,7 @@ pub fn toggle_mode(
 ) {
     for mut player in player_query.iter_mut() {
         if game_input.just_pressed(player.id, GameAction::Mode) {
-            player.mode_active = !player.mode_active;
+            player.mode_cube_active = !player.mode_cube_active;
             if let Ok(sphere_entity) = sphere_query.get_mut(player.sphere) {
                 if let Ok(cube_entity) = cube_query.get_mut(player.slide_cube) {
                     changing_mode(
@@ -685,8 +687,8 @@ pub fn toggle_mode(
                     );
                 }
             }
-        } else if player.mode_active && player.stamin < 0.09 {
-            player.mode_active = false;
+        } else if player.mode_cube_active && player.stamin < 0.09 {
+            player.mode_cube_active = false;
             if let Ok(sphere_entity) = sphere_query.get_mut(player.sphere) {
                 if let Ok(cube_entity) = cube_query.get_mut(player.slide_cube) {
                     changing_mode(
@@ -712,7 +714,7 @@ pub fn detect_slide(
 ) {
     for mut player in player_query.iter_mut() {
         // Solo funciona en modo cubo
-        if !player.mode_active || player.is_sliding {
+        if !player.mode_cube_active || player.is_sliding {
             continue;
         }
 
@@ -910,11 +912,11 @@ pub fn dash_first_touch_ball(
 
     for mut player in player_query.iter_mut() {
         // Solo funciona en modo cubo
-        if !player.mode_active {
+        if !player.mode_cube_active {
             continue;
         }
 
-        if game_input.is_pressed(player.id, GameAction::Sprint) {
+        if game_input.is_pressed(player.id, GameAction::Dash) {
             if config.dash_stamin_cost <= player.stamin {
                 if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
                     for (ball_transform, mut ball_velocity) in ball_query.iter_mut() {

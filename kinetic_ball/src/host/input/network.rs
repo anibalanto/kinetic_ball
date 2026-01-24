@@ -32,7 +32,8 @@ impl InputSource for NetworkInputSource {
             GameAction::Kick => self.current.kick,
             GameAction::CurveLeft => self.current.curve_left,
             GameAction::CurveRight => self.current.curve_right,
-            GameAction::StopInteract => self.current.stop_interact,
+            GameAction::StopInteract => self.previous.stop_interact,
+            GameAction::Dash => self.current.dash,
             GameAction::Sprint => self.current.sprint,
             GameAction::Mode => self.current.mode,
         }
@@ -49,6 +50,7 @@ impl InputSource for NetworkInputSource {
             GameAction::CurveLeft => self.previous.curve_left,
             GameAction::CurveRight => self.previous.curve_right,
             GameAction::StopInteract => self.previous.stop_interact,
+            GameAction::Dash => self.previous.dash,
             GameAction::Sprint => self.previous.sprint,
             GameAction::Mode => self.previous.mode,
         };
@@ -66,6 +68,7 @@ impl InputSource for NetworkInputSource {
             GameAction::CurveLeft => self.previous.curve_left,
             GameAction::CurveRight => self.previous.curve_right,
             GameAction::StopInteract => self.previous.stop_interact,
+            GameAction::Dash => self.previous.dash,
             GameAction::Sprint => self.previous.sprint,
             GameAction::Mode => self.previous.mode,
         };

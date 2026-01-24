@@ -103,8 +103,8 @@ pub struct PlayerInput {
     pub curve_left: bool,
     pub curve_right: bool,
     pub stop_interact: bool,
-    pub sprint: bool,
     pub dash: bool,
+    pub sprint: bool,
     pub mode: bool,
 }
 
@@ -175,7 +175,7 @@ pub struct PlayerState {
     // Team
     pub team_index: u8,
     // Modo cubo activo
-    pub mode_active: bool,
+    pub mode_cube_active: bool,
 }
 
 /// Estado de la pelota
