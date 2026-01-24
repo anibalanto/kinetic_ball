@@ -124,11 +124,6 @@ jobs:
           name: matchbox_server
           path: ./
 
-      - name: Prepare binaries
-        run: |
-          mv kinetic_ball_server-x86_64-unknown-linux-gnu kinetic_ball_server
-          chmod +x kinetic_ball_server matchbox_server
-
       - name: Setup Fly.io
         uses: superfly/flyctl-actions/setup-flyctl@master
 

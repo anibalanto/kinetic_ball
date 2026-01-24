@@ -2,7 +2,7 @@
 *
 
 # Incluir solo los binarios
-!kinetic_ball_server
+!kinetic_ball_server-x86_64-unknown-linux-gnu
 !matchbox_server
 !Dockerfile
 !fly.toml
