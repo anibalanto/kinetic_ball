@@ -150,14 +150,9 @@ impl ConnectionConfig {
     /// Determina si debe usar conexión segura (HTTPS/WSS)
     fn is_secure(&self) -> bool {
         let host = &self.server_host;
-        // Usar conexión segura si:
-        // - Es un dominio de ngrok
-        // - No es localhost/127.0.0.1 y no tiene puerto explícito
-        host.contains(".ngrok") ||
-        host.contains(".ngrok-free.app") ||
-        (!host.starts_with("localhost") &&
-         !host.starts_with("127.0.0.1") &&
-         !host.contains(':'))
+        // Usar HTTP/WS solo para desarrollo local
+        // Todo lo demás usa HTTPS/WSS
+        !host.starts_with("localhost") && !host.starts_with("127.0.0.1")
     }
 
     /// URL HTTP/HTTPS para llamadas REST API

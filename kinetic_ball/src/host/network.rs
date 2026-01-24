@@ -32,11 +32,15 @@ pub fn start_webrtc_server(
 
     rt.block_on(async {
         // Registrar la room en el proxy y obtener token
-        let http_url = format!("http://{}", server_host);
+        // Usar HTTPS/WSS para servidores remotos, HTTP/WS para localhost
+        let is_localhost = server_host.starts_with("127.0.0.1") || server_host.starts_with("localhost");
+        let http_scheme = if is_localhost { "http" } else { "https" };
+        let ws_scheme = if is_localhost { "ws" } else { "wss" };
+        let http_url = format!("{}://{}", http_scheme, server_host);
         let room_url = match register_room_with_proxy(&http_url, &room, &room_name, max_players, map_name.as_deref()).await {
             Ok(token) => {
                 println!("✅ Room '{}' registrada en proxy", room);
-                let ws_url = format!("ws://{}", server_host);
+                let ws_url = format!("{}://{}", ws_scheme, server_host);
                 format!("{}/connect?token={}", ws_url, token)
             }
             Err(e) => {
