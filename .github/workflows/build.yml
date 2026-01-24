@@ -15,19 +15,20 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: kinetic_ball
-            build_server: true # Solo habilitado aquí
+            friendly_name: kinetic_ball_linux
+            server_name: kinetic_ball_server_linux
+            build_server: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: kinetic_ball.exe
+            friendly_name: kinetic_ball.exe
             build_server: false
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: kinetic_ball
+            friendly_name: kinetic_ball_macos_intel
             build_server: false
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: kinetic_ball
+            friendly_name: kinetic_ball_macos_apple_silicon
             build_server: false
 
     runs-on: ${{ matrix.os }}
@@ -72,12 +73,12 @@ jobs:
           EXT=""
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then EXT=".exe"; fi
 
-          # Siempre copiamos el cliente
-          cp target/${{ matrix.target }}/release/kinetic_ball${EXT} out/kinetic_ball-${{ matrix.target }}${EXT}
+          # Copiamos el cliente con nombre amigable
+          cp target/${{ matrix.target }}/release/kinetic_ball${EXT} out/${{ matrix.friendly_name }}
 
           # Copiamos el servidor solo si se buildeó
           if [ "${{ matrix.build_server }}" = "true" ]; then
-            cp target/${{ matrix.target }}/release/kinetic_ball_server${EXT} out/kinetic_ball_server-${{ matrix.target }}${EXT}
+            cp target/${{ matrix.target }}/release/kinetic_ball_server${EXT} out/${{ matrix.server_name }}
           fi
 
       - name: Upload artifacts
