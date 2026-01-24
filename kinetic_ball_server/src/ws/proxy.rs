@@ -28,7 +28,7 @@ pub async fn handle_server_ws(
     let room_id = match state.validate_token(&query.token).await {
         Some(id) => id,
         None => {
-            tracing::warn!("Invalid server token attempted connection");
+            tracing::warn!("❌ Invalid server token attempted connection");
             // Return HTTP error instead of WebSocket close to avoid confusing matchbox_socket
             return axum::response::Response::builder()
                 .status(axum::http::StatusCode::UNAUTHORIZED)
