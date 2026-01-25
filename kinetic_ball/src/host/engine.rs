@@ -268,7 +268,7 @@ pub fn charge_kick(
 pub fn prepare_kick_ball(game_input: Res<GameInputManager>, mut player_query: Query<&mut Player>) {
     for mut player in player_query.iter_mut() {
         // No preparar kick en modo cubo
-        if player.mode_cube_active {
+        if player.mode_cube_active || game_input.is_pressed(player.id, GameAction::StopInteract) {
             continue;
         }
 
@@ -525,14 +525,10 @@ pub fn detect_contact_and_kick(
 }
 
 // Sistema para decrementar el timer de potencia memorizada
-pub fn update_kick_memory_timer(
-    game_input: Res<GameInputManager>,
-    time: Res<Time>,
-    mut player_query: Query<&mut Player>,
-) {
+pub fn update_kick_memory_timer(time: Res<Time>, mut player_query: Query<&mut Player>) {
     for mut player in player_query.iter_mut() {
         // Cancelar en modo cubo o con StopInteract
-        if player.mode_cube_active || game_input.is_pressed(player.id, GameAction::StopInteract) {
+        if player.mode_cube_active {
             player.kick_charge = Vec2::ZERO;
             player.kick_memory_timer = 0.0;
             continue;
@@ -560,8 +556,8 @@ pub fn auto_touch_ball_while_running(
     let default_kick_force = 700.0;
 
     for player in player_query.iter() {
-        // No funciona en modo cubo
-        if player.mode_cube_active {
+        // No funciona en modo cubo o ante un stop interact
+        if player.mode_cube_active || game_input.is_pressed(player.id, GameAction::StopInteract) {
             continue;
         }
 
