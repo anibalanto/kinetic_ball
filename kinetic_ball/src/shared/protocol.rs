@@ -193,9 +193,9 @@ pub struct GameConfig {
     pub team_colors: Vec<(f32, f32, f32)>,
 
     // Velocidades básicas
-    pub player_speed: f32,
-    pub walk_coeficient: f32,
+    pub player_speed_walking: f32,
     pub run_coeficient: f32,
+    pub run_cube_coeficient: f32,
     pub kick_force: f32,
     pub attract_force: f32,
     pub magnus_coefficient: f32,
@@ -260,9 +260,9 @@ impl Default for GameConfig {
             ],
 
             // Velocidades básicas
-            player_speed: 385.0,
-            walk_coeficient: 0.70,
-            run_coeficient: 1.0,
+            player_speed_walking: 300.0,
+            run_coeficient: 1.4,
+            run_cube_coeficient: 1.6,
             kick_force: 2000000.0,
             attract_force: 800.0,
             magnus_coefficient: 33.0,

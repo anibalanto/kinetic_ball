@@ -1,7 +1,7 @@
+use crate::shared::*;
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
 use matchbox_socket::{PeerId, PeerState, WebRtcSocket};
-use crate::shared::*;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -33,11 +33,20 @@ pub fn start_webrtc_server(
     rt.block_on(async {
         // Registrar la room en el proxy y obtener token
         // Usar HTTPS/WSS para servidores remotos, HTTP/WS para localhost
-        let is_localhost = server_host.starts_with("127.0.0.1") || server_host.starts_with("localhost");
+        let is_localhost =
+            server_host.starts_with("127.0.0.1") || server_host.starts_with("localhost");
         let http_scheme = if is_localhost { "http" } else { "https" };
         let ws_scheme = if is_localhost { "ws" } else { "wss" };
         let http_url = format!("{}://{}", http_scheme, server_host);
-        let room_url = match register_room_with_proxy(&http_url, &room, &room_name, max_players, map_name.as_deref()).await {
+        let room_url = match register_room_with_proxy(
+            &http_url,
+            &room,
+            &room_name,
+            max_players,
+            map_name.as_deref(),
+        )
+        .await
+        {
             Ok(token) => {
                 println!("✅ Room '{}' registrada en proxy", room);
                 let ws_url = format!("{}://{}", ws_scheme, server_host);
@@ -216,17 +225,6 @@ pub fn process_network_messages(
                 // Buscar el player_id real usando el peer_id
                 for (player, _) in players.iter() {
                     if player.peer_id == peer_id {
-                        // Log de inputs con movimiento
-                        if input.move_up || input.move_down || input.move_left || input.move_right {
-                            println!(
-                                "🎮 [{}] up={} down={} left={} right={}",
-                                player.name,
-                                input.move_up,
-                                input.move_down,
-                                input.move_left,
-                                input.move_right
-                            );
-                        }
                         game_input.update_input(player.id, input.clone());
                         break;
                     }
@@ -432,7 +430,10 @@ async fn register_room_with_proxy(
         map_name: map_name.map(|s| s.to_string()),
     };
 
-    println!("📡 Registering room '{}' with proxy at {}", room_id, http_url);
+    println!(
+        "📡 Registering room '{}' with proxy at {}",
+        room_id, http_url
+    );
 
     let response = client
         .post(&url)

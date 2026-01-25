@@ -165,19 +165,23 @@ pub fn move_players(
             if movement.length() > 0.0 {
                 let run_stamin_cost = time.delta_secs() * config.run_stamin_coeficient_cost;
 
-                // En modo cubo siempre corre, en modo normal depende de Sprint
-                let should_run =
-                    player.mode_cube_active || game_input.is_pressed(player_id, GameAction::Sprint);
-
-                let move_coeficient = if should_run && player.stamin > run_stamin_cost {
+                let move_coeficient = if player.mode_cube_active
+                    && game_input.is_pressed(player_id, GameAction::Sprint)
+                {
+                    player.stamin -= (1.0 + config.run_cube_coeficient - config.run_coeficient)
+                        * run_stamin_cost;
+                    config.run_cube_coeficient
+                } else if player.mode_cube_active
+                    || game_input.is_pressed(player_id, GameAction::Sprint)
+                {
                     player.stamin -= run_stamin_cost;
                     config.run_coeficient
                 } else {
-                    config.walk_coeficient
+                    1.0
                 };
 
                 velocity.linvel =
-                    movement.normalize_or_zero() * config.player_speed * move_coeficient;
+                    movement.normalize_or_zero() * config.player_speed_walking * move_coeficient;
             } else {
                 velocity.linvel = Vec2::ZERO;
             }
@@ -373,9 +377,7 @@ pub fn attract_ball(
                 let diff = player_transform.translation - ball_transform.translation;
                 let distance = diff.truncate().length();
 
-                if player_velocity.linvel.length()
-                    > config.player_speed * (config.walk_coeficient + 0.1)
-                {
+                if player_velocity.linvel.length() > config.player_speed_walking * 1.1 {
                     return;
                 }
 
@@ -530,9 +532,7 @@ pub fn update_kick_memory_timer(
 ) {
     for mut player in player_query.iter_mut() {
         // Cancelar en modo cubo o con StopInteract
-        if player.mode_cube_active
-            || game_input.is_pressed(player.id, GameAction::StopInteract)
-        {
+        if player.mode_cube_active || game_input.is_pressed(player.id, GameAction::StopInteract) {
             player.kick_charge = Vec2::ZERO;
             player.kick_memory_timer = 0.0;
             continue;
@@ -575,14 +575,12 @@ pub fn auto_touch_ball_while_running(
         }
 
         if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
-            let normalized_velocity =
-                player_velocity.linvel.length() / (config.player_speed * config.run_coeficient);
-            println!("normalized_velocity {}", normalized_velocity);
-            if normalized_velocity < 1.0 {
+            let run_normalized_velocity = player_velocity.linvel.length()
+                / (config.player_speed_walking * config.run_coeficient);
+            println!("normalized_velocity {}", run_normalized_velocity);
+            if run_normalized_velocity < 0.9 {
                 continue;
             }
-
-            println!("auto_touch?");
 
             for (ball_transform, mut ball_velocity) in ball_query.iter_mut() {
                 let p_pos = player_transform.translation.truncate();
@@ -928,7 +926,7 @@ pub fn dash_first_touch_ball(
                             // Vector desde el jugador hacia la pelota
                             let dir_to_ball = diff.normalize_or_zero();
                             // Asignamos una velocidad virtual (puedes usar config.player_speed o un valor fijo)
-                            dir_to_ball * config.player_speed * 0.5
+                            dir_to_ball * config.player_speed_walking * config.run_coeficient * 0.5
                         } else {
                             player_velocity.linvel
                         };
@@ -995,7 +993,7 @@ pub fn recover_stamin(
                 player.stamin = 1.0;
             } else if player.stamin < 1.0 {
                 let speed = velocity.linvel.length();
-                if speed <= config.player_speed * config.walk_coeficient {
+                if speed <= config.player_speed_walking * 1.1 {
                     player.stamin += time.delta_secs() * config.stamin_coeficient_restore;
                 }
             }
