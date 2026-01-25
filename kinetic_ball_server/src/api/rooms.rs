@@ -25,6 +25,7 @@ pub fn rooms_router() -> Router<AppState> {
 }
 
 /// GET /api/rooms - List all open rooms
+/// !TODO add filter my_rooms
 async fn list_rooms(State(state): State<AppState>) -> Json<Vec<RoomInfo>> {
     let rooms = state.list_rooms().await;
     Json(rooms)
@@ -48,13 +49,19 @@ async fn create_room(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     // Validate request
     if request.room_id.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "room_id cannot be empty".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "room_id cannot be empty".to_string(),
+        ));
     }
     if request.name.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "name cannot be empty".to_string()));
     }
     if request.max_players == 0 {
-        return Err((StatusCode::BAD_REQUEST, "max_players must be greater than 0".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "max_players must be greater than 0".to_string(),
+        ));
     }
 
     match state.register_room(request).await {
