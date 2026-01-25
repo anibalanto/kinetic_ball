@@ -2020,10 +2020,23 @@ fn process_network_messages(
 
                 // Determinar si es el jugador local
                 let is_local = my_id.0 == Some(ps.id);
-                let player_layers = if is_local {
+
+                let public_player_layers = if is_local {
                     RenderLayers::from_layers(&[0, 2]) // Visible en cámara principal y detalle
                 } else {
                     RenderLayers::layer(0) // Solo visible en cámara principal
+                };
+
+                let private_player_layers = if is_local {
+                    RenderLayers::from_layers(&[0, 2]) // Visible en cámara principal y detalle
+                } else {
+                    RenderLayers::none() // No visibel
+                };
+
+                let preview_player_layers = if is_local {
+                    RenderLayers::layer(2) // Visible en cámara de detalle
+                } else {
+                    RenderLayers::none() // No visible
                 };
 
                 println!(
@@ -2061,7 +2074,7 @@ fn process_network_messages(
                             target_rotation: ps.rotation,
                             smoothing: 15.0,
                         },
-                        player_layers.clone(),
+                        public_player_layers.clone(),
                     ))
                     .with_children(|parent| {
                         let radius = config.sphere_radius;
@@ -2073,7 +2086,7 @@ fn process_network_messages(
                             MeshMaterial2d(materials.add(Color::BLACK)),
                             Transform::from_xyz(0.0, 0.0, 0.5),
                             PlayerOutline,
-                            player_layers.clone(),
+                            public_player_layers.clone(),
                         ));
 
                         // Círculo principal (relleno) - color del jugador
@@ -2082,7 +2095,7 @@ fn process_network_messages(
                             MeshMaterial2d(materials.add(player_color)),
                             Transform::from_xyz(0.0, 0.0, 1.0),
                             PlayerSprite { parent_id: ps.id },
-                            player_layers.clone(),
+                            public_player_layers.clone(),
                         ));
 
                         // Indicador de dirección (cubo pequeño hacia adelante)
@@ -2116,7 +2129,7 @@ fn process_network_messages(
                                 .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_4))
                                 .with_scale(Vec3::splat(cube_scale)),
                             SlideCubeVisual { parent_id: ps.id },
-                            player_layers.clone(),
+                            preview_player_layers.clone(),
                         ));
 
                         // Barra de carga de patada
@@ -2129,7 +2142,7 @@ fn process_network_messages(
                             },
                             Anchor::CENTER_LEFT,
                             Transform::from_xyz(0.0, 0.0, 30.0),
-                            player_layers.clone(),
+                            private_player_layers.clone(),
                         ));
 
                         let angle = 25.0f32.to_radians();
@@ -2149,7 +2162,7 @@ fn process_network_messages(
                                 rotation: Quat::from_rotation_z(angle),
                                 ..default()
                             },
-                            player_layers.clone(),
+                            private_player_layers.clone(),
                         ));
 
                         // Barra de carga de patada a la derecha
@@ -2167,29 +2180,27 @@ fn process_network_messages(
                                 rotation: Quat::from_rotation_z(-angle),
                                 ..default()
                             },
-                            player_layers.clone(),
+                            private_player_layers.clone(),
                         ));
 
                         let angle_90 = 90.0f32.to_radians();
 
                         // Solo para jugador local: barra de estamina
-                        if is_local {
-                            parent.spawn((
-                                StaminChargeBar,
-                                Sprite {
-                                    color: opposite_color,
-                                    custom_size: Some(Vec2::new(0.0, 5.0)),
-                                    ..default()
-                                },
-                                Anchor::CENTER_LEFT,
-                                Transform {
-                                    translation: Vec3::new(-10.0, -15.0, 30.0),
-                                    rotation: Quat::from_rotation_z(angle_90),
-                                    ..default()
-                                },
-                                RenderLayers::layer(2),
-                            ));
-                        }
+                        parent.spawn((
+                            StaminChargeBar,
+                            Sprite {
+                                color: opposite_color,
+                                custom_size: Some(Vec2::new(0.0, 5.0)),
+                                ..default()
+                            },
+                            Anchor::CENTER_LEFT,
+                            Transform {
+                                translation: Vec3::new(-10.0, -15.0, 30.0),
+                                rotation: Quat::from_rotation_z(angle_90),
+                                ..default()
+                            },
+                            preview_player_layers,
+                        ));
 
                         // Nombre del jugador debajo del sprite
                         parent.spawn((
@@ -2205,43 +2216,37 @@ fn process_network_messages(
                         ));
 
                         // Indicadores de teclas de curva (solo para jugador local)
-                        if is_local {
-                            let angle_90 = std::f32::consts::FRAC_PI_2;
-                            let curve_left_text = key_code_display_name(keybindings.curve_left.0);
-                            let curve_right_text = key_code_display_name(keybindings.curve_right.0);
+                        let angle_90 = std::f32::consts::FRAC_PI_2;
+                        let curve_left_text = key_code_display_name(keybindings.curve_left.0);
+                        let curve_right_text = key_code_display_name(keybindings.curve_right.0);
 
-                            // Tecla izquierda (curve_left)
-                            spawn_key_visual_2d(
-                                parent,
-                                &curve_left_text,
-                                keybindings.curve_left.0,
-                                Vec3::new(
-                                    config.sphere_radius / 2.0,
-                                    -config.sphere_radius * 2.0,
-                                    50.0,
-                                ),
-                                Quat::from_rotation_z(-angle_90),
-                                &mut meshes,
-                                &mut materials,
-                                RenderLayers::layer(2),
-                            );
+                        // Tecla izquierda (curve_left)
+                        spawn_key_visual_2d(
+                            parent,
+                            &curve_left_text,
+                            keybindings.curve_left.0,
+                            Vec3::new(
+                                config.sphere_radius / 2.0,
+                                -config.sphere_radius * 2.0,
+                                50.0,
+                            ),
+                            Quat::from_rotation_z(-angle_90),
+                            &mut meshes,
+                            &mut materials,
+                            private_player_layers.clone(),
+                        );
 
-                            // Tecla derecha (curve_right)
-                            spawn_key_visual_2d(
-                                parent,
-                                &curve_right_text,
-                                keybindings.curve_right.0,
-                                Vec3::new(
-                                    config.sphere_radius / 2.0,
-                                    config.sphere_radius * 2.0,
-                                    50.0,
-                                ),
-                                Quat::from_rotation_z(-angle_90),
-                                &mut meshes,
-                                &mut materials,
-                                RenderLayers::layer(2),
-                            );
-                        }
+                        // Tecla derecha (curve_right)
+                        spawn_key_visual_2d(
+                            parent,
+                            &curve_right_text,
+                            keybindings.curve_right.0,
+                            Vec3::new(config.sphere_radius / 2.0, config.sphere_radius * 2.0, 50.0),
+                            Quat::from_rotation_z(-angle_90),
+                            &mut meshes,
+                            &mut materials,
+                            private_player_layers.clone(),
+                        );
                     });
             }
         }
