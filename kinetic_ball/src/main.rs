@@ -15,6 +15,8 @@ use shared::protocol::{ControlMessage, GameConfig, GameDataMessage, PlayerInput,
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
+use bevy::math::VectorSpace;
+
 mod keybindings;
 use keybindings::{
     key_code_display_name, load_app_config, load_keybindings, save_keybindings, AppConfig,
@@ -2298,7 +2300,6 @@ fn interpolate_entities(time: Res<Time>, mut q: Query<(&mut Transform, &Interpol
 
 fn camera_follow_player_and_ball(
     my_player_id: Res<MyPlayerId>,
-    config: Res<GameConfig>,
     ball_query: Query<
         &Transform,
         (
@@ -2434,39 +2435,56 @@ fn camera_zoom_control(
 
 fn update_charge_bar(
     player_query: Query<(&RemotePlayer, &Children)>,
-    // Una sola query mutable para el Sprite evita el conflicto B0001
+    config: Res<GameConfig>,
     mut sprite_query: Query<&mut Sprite>,
-    // Queries de solo lectura para identificar qué tipo de barra es cada hijo
+    mut mesh_query: Query<&mut Mesh2d>,
+    // Necesitamos acceso mutable a los materiales para cambiar el color
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    material_query: Query<&MeshMaterial2d<ColorMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
     bar_main_q: Query<Entity, With<KickChargeBar>>,
     bar_left_q: Query<Entity, With<KickChargeBarCurveLeft>>,
     bar_right_q: Query<Entity, With<KickChargeBarCurveRight>>,
+    player_outline_q: Query<Entity, With<PlayerOutline>>,
 ) {
     let max_width = 45.0;
+    let radius = config.sphere_radius;
+    let outline_thickness = 3.0;
+    let max_outline_thickness = 7.0;
 
     for (player, children) in player_query.iter() {
+        let charge_pct = player.kick_charge.x; // De 0.0 a 1.0
+
         for child in children.iter() {
-            // Intentamos obtener el sprite del hijo
+            // --- Lógica de Sprites (Barras) ---
             if let Ok(mut sprite) = sprite_query.get_mut(child) {
-                // 1. Caso: Barra Principal
                 if bar_main_q.contains(child) {
-                    sprite.custom_size =
-                        Some(Vec2::new(max_width * player.kick_charge.x + 5.0, 5.0));
+                    sprite.custom_size = Some(Vec2::new(max_width * charge_pct, 5.0));
+                } else if bar_left_q.contains(child) {
+                    let coef = if player.kick_charge.y < 0.0 { 0.5 } else { 0.0 };
+                    sprite.custom_size = Some(Vec2::new(max_width * charge_pct * coef, 5.0));
+                } else if bar_right_q.contains(child) {
+                    let coef = if player.kick_charge.y > 0.0 { 0.5 } else { 0.0 };
+                    sprite.custom_size = Some(Vec2::new(max_width * charge_pct * coef, 5.0));
                 }
-                // 2. Caso: Curva Izquierda (kick_charge.y < 0)
-                else if bar_left_q.contains(child) {
-                    let coeficient = if player.kick_charge.y < 0.0 { 0.5 } else { 0.0 };
-                    sprite.custom_size = Some(Vec2::new(
-                        max_width * player.kick_charge.x * coeficient + 5.0,
-                        5.0,
-                    ));
+            }
+            // --- Lógica del Outline (Mesh + Color) ---
+            else if player_outline_q.contains(child) {
+                // 1. Actualizar el tamaño del Mesh
+                if let Ok(mut mesh_handle) = mesh_query.get_mut(child) {
+                    let dynamic_thickness = charge_pct * max_outline_thickness;
+                    let new_radius = radius + outline_thickness + dynamic_thickness;
+                    *mesh_handle = meshes.add(Circle::new(new_radius)).into();
                 }
-                // 3. Caso: Curva Derecha (kick_charge.y > 0)
-                else if bar_right_q.contains(child) {
-                    let coeficient = if player.kick_charge.y > 0.0 { 0.5 } else { 0.0 };
-                    sprite.custom_size = Some(Vec2::new(
-                        max_width * player.kick_charge.x * coeficient + 5.0,
-                        5.0,
-                    ));
+
+                // 2. Actualizar el Color (de Negro a Blanco)
+                if let Ok(mat_handle) = material_query.get(child) {
+                    if let Some(material) = materials.get_mut(mat_handle) {
+                        let r = charge_pct; // De 0.0 a 1.0
+                        let g = charge_pct;
+                        let b = charge_pct;
+                        material.color = Color::LinearRgba(LinearRgba::new(r, g, b, 1.0));
+                    }
                 }
             }
         }
