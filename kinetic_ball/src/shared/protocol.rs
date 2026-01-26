@@ -264,7 +264,7 @@ impl Default for GameConfig {
             run_coeficient: 1.4,
             run_cube_coeficient: 1.6,
             kick_force: 2000000.0,
-            attract_force: 800.0,
+            attract_force: 400.0,
             magnus_coefficient: 33.0,
 
             // Propiedades físicas de las esferas
