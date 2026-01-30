@@ -1,10 +1,11 @@
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::{visibility::RenderLayers, RenderTarget, ScalingMode};
+use bevy::camera::{visibility::RenderLayers, RenderTarget, ScalingMode, Viewport};
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureDimension, TextureFormat, TextureUsages};
 use bevy::sprite::Anchor;
 use bevy::ui::widget::ViewportNode;
+use bevy::ui::UiTargetCamera;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use bevy_rapier2d::prelude::*;
 use clap::Parser;
@@ -241,6 +242,34 @@ fn complementary_color(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
     hsv_to_rgb(h_opposite, s, v)
 }
 
+/// Genera un color único para un jugador, evitando la zona verde del fondo del minimapa.
+/// Usa golden ratio para distribución uniforme y evita hues 80°-160° (zona verde).
+fn generate_unique_player_color(player_colors: &mut PlayerColors) -> Color {
+    const GOLDEN_RATIO: f32 = 0.618033988749895;
+
+    // Calcular el hue base usando golden ratio para máxima separación
+    let raw_hue = player_colors.next_hue_offset;
+    player_colors.next_hue_offset = (player_colors.next_hue_offset + GOLDEN_RATIO) % 1.0;
+
+    // Evitar zona verde (80°-160° = 0.222-0.444 en rango 0-1)
+    // Mapear el hue a los rangos válidos: 0°-80° (0.0-0.222) y 160°-360° (0.444-1.0)
+    // Rango válido total: 0.222 + 0.556 = 0.778 del espectro
+    let valid_range = 0.778;
+    let scaled_hue = raw_hue * valid_range;
+
+    let final_hue = if scaled_hue < 0.222 {
+        // Zona roja/naranja/amarilla (0° - 80°)
+        scaled_hue
+    } else {
+        // Zona azul/magenta/rosa (160° - 360°)
+        scaled_hue + 0.222 // Saltar la zona verde
+    };
+
+    // Saturación alta (0.85) y Value alto (0.95) para visibilidad
+    let (r, g, b) = hsv_to_rgb(final_hue, 0.85, 0.95);
+    Color::srgb(r, g, b)
+}
+
 /// Calcula el color del jugador y su color opuesto para barras/texto
 /// basándose en el índice de equipo y los colores definidos en la configuración
 fn get_team_colors(team_index: u8, team_colors: &[(f32, f32, f32)]) -> (Color, Color) {
@@ -315,6 +344,8 @@ fn main() {
         .insert_resource(LocalPlayers::new(4)) // Máximo 4 jugadores locales
         .insert_resource(AvailableInputDevices::default())
         .insert_resource(LocalPlayersUIState::default())
+        // Player colors for split-screen
+        .insert_resource(PlayerColors::default())
         // Cargar assets embebidos al inicio (antes de todo)
         .add_systems(Startup, load_embedded_assets)
         // Sistemas de input y detección
@@ -403,6 +434,7 @@ fn main() {
                 keep_name_horizontal,
                 camera_follow_player_and_ball,
                 camera_zoom_control,
+                update_camera_viewports,
                 update_charge_bar,
                 update_player_sprite,
                 process_movements,
@@ -410,6 +442,7 @@ fn main() {
                 update_dash_cooldown,
                 spawn_minimap_dots,
                 sync_minimap_dots,
+                sync_minimap_names,
                 cleanup_minimap_dots,
                 animate_keys,
             )
@@ -499,6 +532,13 @@ struct MyPlayerId(Option<u32>);
 #[derive(Resource, Default)]
 struct LoadedMap(Option<shared::map::Map>);
 
+/// Colores únicos para cada jugador en el minimapa y nombres
+#[derive(Resource, Default)]
+struct PlayerColors {
+    colors: std::collections::HashMap<u32, Color>, // server_player_id -> Color
+    next_hue_offset: f32,
+}
+
 #[derive(Component)]
 struct DefaultFieldLine;
 
@@ -518,7 +558,16 @@ struct MenuCamera;
 struct MinimapCamera;
 
 #[derive(Component)]
-struct PlayerDetailCamera;
+struct PlayerDetailCamera {
+    local_index: u8,
+}
+
+#[derive(Component)]
+struct SplitScreenDivider;
+
+/// Cámara dedicada para UI que no tiene viewport (renderiza pantalla completa)
+#[derive(Component)]
+struct GameUiCamera;
 
 // ============================================================================
 // COMPONENTES
@@ -527,6 +576,7 @@ struct PlayerDetailCamera;
 #[derive(Component)]
 struct RemotePlayer {
     id: u32,
+    name: String,
     team_index: u8,
     kick_charge: Vec2, // x = potencia, y = curva
     is_sliding: bool,
@@ -542,7 +592,10 @@ struct RemotePlayer {
 struct RemoteBall;
 
 #[derive(Component)]
-struct MainCamera;
+struct PlayerCamera {
+    local_index: u8,
+    server_player_id: Option<u32>,
+}
 
 #[derive(Component)]
 struct Interpolated {
@@ -582,6 +635,11 @@ struct SlideCubeVisual {
 
 #[derive(Component)]
 struct MinimapDot {
+    tracks_entity: Entity,
+}
+
+#[derive(Component)]
+struct MinimapPlayerName {
     tracks_entity: Entity,
 }
 
@@ -2130,18 +2188,61 @@ fn spawn_key_visual_2d(
         });
 }
 
-fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Assets<Image>>) {
-    // Cámara principal - Layer 0 (todo excepto minimap dots)
-    commands.spawn((
-        Camera2d,
-        Projection::Orthographic(OrthographicProjection {
-            scale: 3.0,
-            ..OrthographicProjection::default_2d()
-        }),
-        Transform::from_xyz(0.0, 0.0, 999.0),
-        MainCamera,
-        RenderLayers::layer(0),
-    ));
+fn setup(
+    mut commands: Commands,
+    config: Res<GameConfig>,
+    mut images: ResMut<Assets<Image>>,
+    local_players: Res<LocalPlayers>,
+    windows: Query<&Window>,
+) {
+    // Obtener tamaño de ventana para calcular viewports
+    let window = windows.iter().next();
+    let window_size = window
+        .map(|w| UVec2::new(w.physical_width(), w.physical_height()))
+        .unwrap_or(UVec2::new(1280, 720));
+
+    // Número de jugadores locales (mínimo 1)
+    let num_local_players = local_players.players.len().max(1);
+
+    // Crear cámaras para cada jugador local con viewports divididos verticalmente
+    for i in 0..num_local_players {
+        let viewport = if num_local_players == 1 {
+            // Un solo jugador: pantalla completa (sin viewport)
+            None
+        } else {
+            // Múltiples jugadores: dividir pantalla verticalmente
+            let viewport_width = window_size.x / num_local_players as u32;
+            Some(Viewport {
+                physical_position: UVec2::new(viewport_width * i as u32, 0),
+                physical_size: UVec2::new(viewport_width, window_size.y),
+                ..default()
+            })
+        };
+
+        let server_player_id = local_players
+            .players
+            .get(i)
+            .and_then(|lp| lp.server_player_id);
+
+        commands.spawn((
+            Camera2d,
+            Camera {
+                order: i as isize, // Orden de renderizado
+                viewport: viewport.clone(),
+                ..default()
+            },
+            Projection::Orthographic(OrthographicProjection {
+                scale: 3.0,
+                ..OrthographicProjection::default_2d()
+            }),
+            Transform::from_xyz(0.0, 0.0, 999.0),
+            PlayerCamera {
+                local_index: i as u8,
+                server_player_id,
+            },
+            RenderLayers::layer(0),
+        ));
+    }
 
     // --- Crear texturas de render target para ViewportNodes ---
 
@@ -2162,21 +2263,6 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
     minimap_image.texture_descriptor.usage =
         TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
     let minimap_image_handle = images.add(minimap_image);
-
-    // Textura para detalle del jugador
-    let mut detail_image = Image::new_uninit(
-        bevy::render::render_resource::Extent3d {
-            width: detail_size.x,
-            height: detail_size.y,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        TextureFormat::Bgra8UnormSrgb,
-        RenderAssetUsages::all(),
-    );
-    detail_image.texture_descriptor.usage =
-        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
-    let detail_image_handle = images.add(detail_image);
 
     // --- Cámara minimapa - Layer 1 (renderiza a textura) ---
     let minimap_camera = commands
@@ -2201,25 +2287,78 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
         ))
         .id();
 
-    // --- Cámara Detalle Jugador - Layer 2 (renderiza a textura) ---
-    let detail_camera = commands
+    // --- Crear cámaras de detalle para cada jugador local ---
+    let mut detail_cameras: Vec<Entity> = Vec::new();
+    for i in 0..num_local_players.min(2) {
+        // Crear textura de detalle para este jugador
+        let mut detail_image = Image::new_uninit(
+            bevy::render::render_resource::Extent3d {
+                width: detail_size.x,
+                height: detail_size.y,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            TextureFormat::Bgra8UnormSrgb,
+            RenderAssetUsages::all(),
+        );
+        detail_image.texture_descriptor.usage =
+            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+        let detail_image_handle = images.add(detail_image);
+
+        let detail_camera = commands
+            .spawn((
+                Camera2d,
+                Camera {
+                    order: -1 - i as isize, // Renderiza antes que la principal
+                    target: RenderTarget::Image(detail_image_handle.clone().into()),
+                    clear_color: ClearColorConfig::Custom(Color::srgba(0.2, 0.2, 0.2, 0.6)),
+                    ..default()
+                },
+                Projection::Orthographic(OrthographicProjection {
+                    scale: 1.5,
+                    ..OrthographicProjection::default_2d()
+                }),
+                Transform::from_xyz(0.0, 0.0, 999.0),
+                PlayerDetailCamera { local_index: i as u8 },
+                RenderLayers::layer(2),
+            ))
+            .id();
+
+        detail_cameras.push(detail_camera);
+    }
+
+    // --- Cámara UI dedicada (sin viewport, renderiza UI en pantalla completa) ---
+    let ui_camera = commands
         .spawn((
             Camera2d,
             Camera {
-                order: -1, // Renderiza antes que la principal
-                target: RenderTarget::Image(detail_image_handle.clone().into()),
-                clear_color: ClearColorConfig::Custom(Color::srgba(0.2, 0.2, 0.2, 0.6)),
+                order: 100, // Renderiza después de todo lo demás
                 ..default()
             },
-            Projection::Orthographic(OrthographicProjection {
-                scale: 1.5,
-                ..OrthographicProjection::default_2d()
-            }),
-            Transform::from_xyz(0.0, 0.0, 999.0),
-            PlayerDetailCamera,
-            RenderLayers::layer(2),
+            GameUiCamera,
+            // No renderiza nada del juego, solo UI
+            RenderLayers::none(),
         ))
         .id();
+
+    // --- Línea divisoria para split-screen (solo si hay 2+ jugadores) ---
+    if num_local_players >= 2 {
+        commands.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(50.0),
+                top: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                width: Val::Px(4.0),
+                margin: UiRect::left(Val::Px(-2.0)), // Centrar la línea
+                ..default()
+            },
+            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
+            SplitScreenDivider,
+            UiTargetCamera(ui_camera),
+            Pickable::IGNORE,
+        ));
+    }
 
     // --- UI con ViewportNodes ---
     // Contenedor raíz para posicionar los viewports
@@ -2233,19 +2372,36 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
                 padding: UiRect::all(Val::Px(config.ui_padding)),
                 ..default()
             },
+            UiTargetCamera(ui_camera),
             // No bloquear clicks en el juego
             Pickable::IGNORE,
         ))
         .with_children(|parent| {
-            // Espaciador izquierdo (para centrar el minimapa)
-            parent.spawn((
-                Node {
-                    width: Val::Px(200.0), // Mismo ancho que el detalle
-                    height: Val::Px(200.0),
-                    ..default()
-                },
-                Visibility::Hidden,
-            ));
+            // Detalle del jugador 1 (izquierda abajo) - circular
+            if let Some(&detail_cam) = detail_cameras.first() {
+                parent.spawn((
+                    Node {
+                        width: Val::Px(detail_size.x as f32),
+                        height: Val::Px(detail_size.y as f32),
+                        border: UiRect::all(Val::Px(3.0)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::WHITE),
+                    BorderRadius::all(Val::Percent(50.0)), // Circular
+                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+                    ViewportNode::new(detail_cam),
+                ));
+            } else {
+                // Espaciador si no hay jugadores
+                parent.spawn((
+                    Node {
+                        width: Val::Px(detail_size.x as f32),
+                        height: Val::Px(detail_size.y as f32),
+                        ..default()
+                    },
+                    Visibility::Hidden,
+                ));
+            }
 
             // Minimapa (centro abajo)
             parent.spawn((
@@ -2261,19 +2417,31 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
                 ViewportNode::new(minimap_camera),
             ));
 
-            // Detalle del jugador (derecha abajo) - circular
-            parent.spawn((
-                Node {
-                    width: Val::Px(detail_size.x as f32),
-                    height: Val::Px(detail_size.y as f32),
-                    border: UiRect::all(Val::Px(3.0)),
-                    ..default()
-                },
-                BorderColor::all(Color::WHITE),
-                BorderRadius::all(Val::Percent(50.0)), // Circular
-                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
-                ViewportNode::new(detail_camera),
-            ));
+            // Detalle del jugador 2 (derecha abajo) - circular
+            if let Some(&detail_cam) = detail_cameras.get(1) {
+                parent.spawn((
+                    Node {
+                        width: Val::Px(detail_size.x as f32),
+                        height: Val::Px(detail_size.y as f32),
+                        border: UiRect::all(Val::Px(3.0)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::WHITE),
+                    BorderRadius::all(Val::Percent(50.0)), // Circular
+                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+                    ViewportNode::new(detail_cam),
+                ));
+            } else if num_local_players == 1 {
+                // Espaciador para mantener el minimapa centrado cuando hay 1 jugador
+                parent.spawn((
+                    Node {
+                        width: Val::Px(detail_size.x as f32),
+                        height: Val::Px(detail_size.y as f32),
+                        ..default()
+                    },
+                    Visibility::Hidden,
+                ));
+            }
         });
 
     // El Campo de Juego (Césped) - Color verde - Layer 0
@@ -2460,6 +2628,7 @@ pub struct NetworkParams<'w, 's> {
     pub gamepad_bindings_map: Res<'w, GamepadBindingsMap>,
     pub local_players: ResMut<'w, LocalPlayers>,
     pub game_tick: ResMut<'w, GameTick>,
+    pub player_colors: ResMut<'w, PlayerColors>,
 }
 
 #[derive(SystemParam)]
@@ -2484,7 +2653,7 @@ pub struct NetworkQueries<'w, 's> {
             &'static mut RemotePlayer,
             &'static Children,
         ),
-        (Without<RemoteBall>, Without<MainCamera>),
+        (Without<RemoteBall>, Without<PlayerCamera>),
     >,
     pub bar_sprites: Query<
         'w,
@@ -2518,6 +2687,7 @@ fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQueri
     let local_players = &mut params.local_players;
     let game_tick = &mut params.game_tick;
     let gamepad_bindings_map = params.gamepad_bindings_map;
+    let player_colors = &mut params.player_colors;
 
     let ball_q = &mut queries.ball_q;
     let players_q = &mut queries.players_q;
@@ -2771,6 +2941,17 @@ fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQueri
                 let (player_color, opposite_color) =
                     get_team_colors(ps.team_index, &config.team_colors);
 
+                // Generar color único para el jugador (para nombre y minimapa)
+                let unique_player_color = player_colors
+                    .colors
+                    .get(&ps.id)
+                    .copied()
+                    .unwrap_or_else(|| {
+                        let color = generate_unique_player_color(player_colors);
+                        player_colors.colors.insert(ps.id, color);
+                        color
+                    });
+
                 // Usar textura con children
                 commands
                     .spawn((
@@ -2778,6 +2959,7 @@ fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQueri
                         Visibility::default(),
                         RemotePlayer {
                             id: ps.id,
+                            name: ps.name.clone(),
                             team_index: ps.team_index,
                             kick_charge: ps.kick_charge,
                             is_sliding: ps.is_sliding,
@@ -2931,7 +3113,7 @@ fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQueri
                                 font_size: 20.0,
                                 ..default()
                             },
-                            TextColor(Color::WHITE),
+                            TextColor(unique_player_color),
                             Transform::from_xyz(-config.sphere_radius * 1.5, 0.0, 10.0),
                             RenderLayers::layer(0),
                         ));
@@ -3062,11 +3244,12 @@ fn interpolate_entities(time: Res<Time>, mut q: Query<(&mut Transform, &Interpol
 
 fn camera_follow_player_and_ball(
     my_player_id: Res<MyPlayerId>,
+    local_players: Res<LocalPlayers>,
     ball_query: Query<
         &Transform,
         (
             With<RemoteBall>,
-            Without<MainCamera>,
+            Without<PlayerCamera>,
             Without<MinimapCamera>,
             Without<PlayerDetailCamera>,
         ),
@@ -3074,81 +3257,120 @@ fn camera_follow_player_and_ball(
     players: Query<
         (&RemotePlayer, &Transform),
         (
-            Without<MainCamera>,
+            Without<PlayerCamera>,
             Without<MinimapCamera>,
             Without<PlayerDetailCamera>,
         ),
     >,
     mut cameras: ParamSet<(
-        Query<&mut Transform, With<MainCamera>>,
+        Query<(&mut Transform, &PlayerCamera)>,
         Query<&mut Transform, With<MinimapCamera>>,
-        Query<&mut Transform, With<PlayerDetailCamera>>,
+        Query<(&mut Transform, &PlayerDetailCamera)>,
     )>,
     time: Res<Time>,
     windows: Query<&Window>,
 ) {
-    let Some(my_id) = my_player_id.0 else { return };
     let Some(_) = windows.iter().next() else {
         return;
     };
 
-    let player_pos = players
+    let delta = time.delta_secs();
+    let smoothing = 10.0;
+
+    // Obtener posición de la pelota (común para todas las cámaras)
+    let ball_pos = ball_query
         .iter()
-        .find(|(p, _)| p.id == my_id)
-        .map(|(_, t)| t.translation);
+        .next()
+        .map(|t| t.translation);
 
-    if let Some(p_pos) = player_pos {
-        let ball_pos = ball_query
+    // Calcular cuántos jugadores locales hay para ajustar límites horizontales
+    let num_local_players = local_players.players.len().max(1);
+    let is_split_screen = num_local_players > 1;
+
+    // Iterar sobre todas las cámaras de jugador
+    for (mut cam_transform, player_camera) in cameras.p0().iter_mut() {
+        // Determinar qué jugador debe seguir esta cámara
+        let target_player_id = player_camera.server_player_id.or(my_player_id.0);
+
+        let Some(target_id) = target_player_id else {
+            continue;
+        };
+
+        // Buscar la posición del jugador objetivo
+        let player_pos = players
             .iter()
-            .next()
-            .map(|t| t.translation)
-            .unwrap_or(p_pos);
+            .find(|(p, _)| p.id == target_id)
+            .map(|(_, t)| t.translation);
 
-        // 1. Objetivo base
-        let target_pos = p_pos.lerp(ball_pos, 0.65);
+        if let Some(p_pos) = player_pos {
+            let ball_position = ball_pos.unwrap_or(p_pos);
 
-        // 2. Límites de cámara (Rectángulo de libertad)
-        // Recordatorio: +Y es ARRIBA, -Y es ABAJO.
+            // 1. Objetivo base
+            let target_pos = p_pos.lerp(ball_position, 0.65);
 
-        // Si la UI está ABAJO, queremos que la cámara no suba tanto (limit_up pequeño)
-        // para que el jugador no baje hacia la zona de la UI.
-        let limit_up = 120.0; // Restringido: evita que el jugador caiga hacia la UI inferior
-        let limit_down = 400.0; // Libertad: el jugador puede subir en la pantalla sin problemas
+            // 2. Límites de cámara (ajustados para split-screen)
+            // En split-screen, los límites horizontales son menores
+            let limit_up = 120.0;
+            let limit_down = 400.0;
 
-        let limit_left = 450.0; // Libertad total izquierda
-        let limit_right = 200.0; // Restringido por el Player Detail (derecha abajo)
+            // Reducir límites horizontales en split-screen porque la vista es más angosta
+            let (limit_left, limit_right) = if is_split_screen {
+                (225.0, 100.0) // Mitad de los valores normales
+            } else {
+                (450.0, 200.0)
+            };
 
-        // 3. Clamping asimétrico corregido
-        let mut final_target = target_pos;
-        let diff = target_pos - p_pos;
+            // 3. Clamping asimétrico
+            let mut final_target = target_pos;
+            let diff = target_pos - p_pos;
 
-        // Eje X
-        if diff.x > limit_right {
-            final_target.x = p_pos.x + limit_right;
-        } else if diff.x < -limit_left {
-            final_target.x = p_pos.x - limit_left;
+            // Eje X
+            if diff.x > limit_right {
+                final_target.x = p_pos.x + limit_right;
+            } else if diff.x < -limit_left {
+                final_target.x = p_pos.x - limit_left;
+            }
+
+            // Eje Y
+            if diff.y > limit_up {
+                final_target.y = p_pos.y + limit_up;
+            } else if diff.y < -limit_down {
+                final_target.y = p_pos.y - limit_down;
+            }
+
+            // 4. Aplicar movimiento suavizado
+            cam_transform.translation.x +=
+                (final_target.x - cam_transform.translation.x) * smoothing * delta;
+            cam_transform.translation.y +=
+                (final_target.y - cam_transform.translation.y) * smoothing * delta;
         }
+    }
 
-        // Eje Y (Corregido: limit_up controla cuánto sube la cámara relativo al player)
-        if diff.y > limit_up {
-            final_target.y = p_pos.y + limit_up;
-        } else if diff.y < -limit_down {
-            final_target.y = p_pos.y - limit_down;
-        }
+    // 5. Cámaras de Detalle (cada una sigue a su jugador local correspondiente)
+    for (mut cam_transform, detail_camera) in cameras.p2().iter_mut() {
+        // Buscar el jugador local correspondiente a esta cámara de detalle
+        let target_player_id = local_players
+            .players
+            .get(detail_camera.local_index as usize)
+            .and_then(|lp| lp.server_player_id)
+            .or_else(|| {
+                // Fallback: si no hay jugador local, usar my_player_id para la primera cámara
+                if detail_camera.local_index == 0 {
+                    my_player_id.0
+                } else {
+                    None
+                }
+            });
 
-        // 4. Aplicar movimiento suavizado
-        let delta = time.delta_secs();
-        let smoothing = 10.0;
-
-        if let Some(mut cam_t) = cameras.p0().iter_mut().next() {
-            cam_t.translation.x += (final_target.x - cam_t.translation.x) * smoothing * delta;
-            cam_t.translation.y += (final_target.y - cam_t.translation.y) * smoothing * delta;
-        }
-
-        // 5. Cámara Detalle
-        if let Some(mut cam_t) = cameras.p2().iter_mut().next() {
-            cam_t.translation.x = p_pos.x;
-            cam_t.translation.y = p_pos.y;
+        if let Some(target_id) = target_player_id {
+            if let Some(p_pos) = players
+                .iter()
+                .find(|(p, _)| p.id == target_id)
+                .map(|(_, t)| t.translation)
+            {
+                cam_transform.translation.x = p_pos.x;
+                cam_transform.translation.y = p_pos.y;
+            }
         }
     }
 }
@@ -3156,42 +3378,88 @@ fn camera_follow_player_and_ball(
 // Sistema de control de zoom con teclas numéricas
 fn camera_zoom_control(
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut camera: Query<&mut Projection, With<MainCamera>>,
+    mut cameras: Query<&mut Projection, With<PlayerCamera>>,
 ) {
-    let Ok(mut projection_comp) = camera.single_mut() else {
+    let mut new_scale = None;
+
+    // Teclas 1-9 para diferentes niveles de zoom
+    if keyboard.just_pressed(KeyCode::Digit9) {
+        new_scale = Some(0.5); // Muy cerca
+    } else if keyboard.just_pressed(KeyCode::Digit8) {
+        new_scale = Some(0.75);
+    } else if keyboard.just_pressed(KeyCode::Digit7) {
+        new_scale = Some(1.0); // Normal
+    } else if keyboard.just_pressed(KeyCode::Digit6) {
+        new_scale = Some(1.3);
+    } else if keyboard.just_pressed(KeyCode::Digit5) {
+        new_scale = Some(1.5);
+    } else if keyboard.just_pressed(KeyCode::Digit4) {
+        new_scale = Some(2.0); // Lejos
+    } else if keyboard.just_pressed(KeyCode::Digit3) {
+        new_scale = Some(2.5);
+    } else if keyboard.just_pressed(KeyCode::Digit2) {
+        new_scale = Some(3.0);
+    } else if keyboard.just_pressed(KeyCode::Digit1) {
+        new_scale = Some(4.0); // Muy lejos
+    }
+
+    if let Some(scale) = new_scale {
+        // Aplicar zoom a todas las cámaras de jugador
+        for mut projection_comp in cameras.iter_mut() {
+            if let Projection::Orthographic(ref mut projection) = projection_comp.as_mut() {
+                projection.scale = scale;
+            }
+        }
+        println!("📷 Zoom ajustado a: {:.1}x", scale);
+    }
+}
+
+/// Sistema que actualiza los viewports de las cámaras cuando cambia el número de jugadores locales
+/// o el tamaño de la ventana, y sincroniza los server_player_id
+fn update_camera_viewports(
+    local_players: Res<LocalPlayers>,
+    windows: Query<&Window>,
+    mut cameras: Query<(&mut Camera, &mut PlayerCamera)>,
+) {
+    // Solo procesar si hay cambios (el sistema se ejecuta cada frame, pero es ligero)
+    let Some(window) = windows.iter().next() else {
         return;
     };
-    let Projection::Orthographic(ref mut projection) = projection_comp.as_mut() else {
+
+    let window_size = UVec2::new(window.physical_width(), window.physical_height());
+    if window_size.x == 0 || window_size.y == 0 {
         return;
-    };
-    {
-        let mut new_scale = None;
+    }
 
-        // Teclas 1-9 para diferentes niveles de zoom
-        if keyboard.just_pressed(KeyCode::Digit9) {
-            new_scale = Some(0.5); // Muy cerca
-        } else if keyboard.just_pressed(KeyCode::Digit8) {
-            new_scale = Some(0.75);
-        } else if keyboard.just_pressed(KeyCode::Digit7) {
-            new_scale = Some(1.0); // Normal
-        } else if keyboard.just_pressed(KeyCode::Digit6) {
-            new_scale = Some(1.3);
-        } else if keyboard.just_pressed(KeyCode::Digit5) {
-            new_scale = Some(1.5);
-        } else if keyboard.just_pressed(KeyCode::Digit4) {
-            new_scale = Some(2.0); // Lejos
-        } else if keyboard.just_pressed(KeyCode::Digit3) {
-            new_scale = Some(2.5);
-        } else if keyboard.just_pressed(KeyCode::Digit2) {
-            new_scale = Some(3.0);
-        } else if keyboard.just_pressed(KeyCode::Digit1) {
-            new_scale = Some(4.0); // Muy lejos
+    let num_local_players = local_players.players.len().max(1);
+
+    for (mut camera, mut player_cam) in cameras.iter_mut() {
+        // Sincronizar server_player_id desde LocalPlayers
+        if let Some(local_player) = local_players.players.get(player_cam.local_index as usize) {
+            player_cam.server_player_id = local_player.server_player_id;
         }
 
-        if let Some(scale) = new_scale {
-            projection.scale = scale;
-            println!("📷 Zoom ajustado a: {:.1}x", scale);
-        }
+        let viewport = if num_local_players == 1 {
+            // Un solo jugador: sin viewport (pantalla completa)
+            None
+        } else {
+            // Múltiples jugadores: dividir pantalla verticalmente
+            let viewport_width = window_size.x / num_local_players as u32;
+            let index = player_cam.local_index as u32;
+
+            // Solo crear viewport si el índice es válido
+            if index < num_local_players as u32 {
+                Some(Viewport {
+                    physical_position: UVec2::new(viewport_width * index, 0),
+                    physical_size: UVec2::new(viewport_width, window_size.y),
+                    ..default()
+                })
+            } else {
+                None
+            }
+        };
+
+        camera.viewport = viewport;
     }
 }
 
@@ -3817,50 +4085,80 @@ fn approximate_curve_for_rendering(
 // SISTEMAS DE MINIMAPA
 // ============================================================================
 
-/// Crea puntos en Layer 1 cuando aparecen jugadores/pelota
+/// Crea puntos y nombres en Layer 1 cuando aparecen jugadores/pelota
 fn spawn_minimap_dots(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     config: Res<GameConfig>,
+    player_colors: Res<PlayerColors>,
     existing_dots: Query<&MinimapDot>,
+    existing_names: Query<&MinimapPlayerName>,
     players_with_dots: Query<(Entity, &RemotePlayer)>,
     ball_with_dots: Query<Entity, With<RemoteBall>>,
 ) {
-    // Crear set de entidades ya trackeadas
-    let tracked_entities: std::collections::HashSet<Entity> =
+    // Crear set de entidades ya trackeadas por dots
+    let tracked_dots: std::collections::HashSet<Entity> =
         existing_dots.iter().map(|dot| dot.tracks_entity).collect();
 
-    // Spawn dots para jugadores que aún no tienen
+    // Crear set de entidades ya trackeadas por nombres
+    let tracked_names: std::collections::HashSet<Entity> =
+        existing_names.iter().map(|name| name.tracks_entity).collect();
+
+    // Spawn dots y nombres para jugadores que aún no tienen
     for (entity, player) in players_with_dots.iter() {
-        if tracked_entities.contains(&entity) {
-            continue;
+        // Spawn dot si no existe
+        if !tracked_dots.contains(&entity) {
+            // Color del equipo desde config
+            let team_color = config
+                .team_colors
+                .get(player.team_index as usize)
+                .copied()
+                .unwrap_or((0.5, 0.5, 0.5));
+
+            let dot_color = Color::srgb(team_color.0, team_color.1, team_color.2);
+
+            // Círculo de 120px para jugadores
+            commands.spawn((
+                Mesh2d(meshes.add(Circle::new(120.0))),
+                MeshMaterial2d(materials.add(dot_color)),
+                Transform::from_xyz(0.0, 0.0, 10.0),
+                MinimapDot {
+                    tracks_entity: entity,
+                },
+                RenderLayers::layer(1),
+            ));
         }
 
-        // Color del equipo desde config
-        let team_color = config
-            .team_colors
-            .get(player.team_index as usize)
-            .copied()
-            .unwrap_or((0.5, 0.5, 0.5));
+        // Spawn nombre si no existe
+        if !tracked_names.contains(&entity) {
+            // Usar color único del jugador para el nombre en el minimapa
+            let name_color = player_colors
+                .colors
+                .get(&player.id)
+                .copied()
+                .unwrap_or(Color::WHITE);
 
-        let dot_color = Color::srgb(team_color.0, team_color.1, team_color.2);
-
-        // Círculo de 120px para jugadores
-        commands.spawn((
-            Mesh2d(meshes.add(Circle::new(120.0))),
-            MeshMaterial2d(materials.add(dot_color)),
-            Transform::from_xyz(0.0, 0.0, 10.0),
-            MinimapDot {
-                tracks_entity: entity,
-            },
-            RenderLayers::layer(1),
-        ));
+            // Crear un nodo de texto para el nombre del jugador
+            commands.spawn((
+                Text2d::new(player.name.clone()),
+                TextFont {
+                    font_size: 80.0,
+                    ..default()
+                },
+                TextColor(name_color),
+                Transform::from_xyz(0.0, 150.0, 12.0), // Posición encima del dot
+                MinimapPlayerName {
+                    tracks_entity: entity,
+                },
+                RenderLayers::layer(1),
+            ));
+        }
     }
 
     // Spawn dot para pelota si no tiene
     for entity in ball_with_dots.iter() {
-        if tracked_entities.contains(&entity) {
+        if tracked_dots.contains(&entity) {
             continue;
         }
 
@@ -3894,12 +4192,34 @@ fn sync_minimap_dots(
 fn cleanup_minimap_dots(
     mut commands: Commands,
     dots: Query<(Entity, &MinimapDot)>,
+    names: Query<(Entity, &MinimapPlayerName)>,
     entities: Query<Entity>,
 ) {
+    // Limpiar dots
     for (dot_entity, dot) in dots.iter() {
         // Si la entidad trackeada ya no existe, eliminar el dot
         if entities.get(dot.tracks_entity).is_err() {
             commands.entity(dot_entity).despawn();
+        }
+    }
+
+    // Limpiar nombres
+    for (name_entity, name) in names.iter() {
+        if entities.get(name.tracks_entity).is_err() {
+            commands.entity(name_entity).despawn();
+        }
+    }
+}
+
+/// Sincroniza posición de nombres del minimapa con entidades reales
+fn sync_minimap_names(
+    mut names: Query<(&MinimapPlayerName, &mut Transform), Without<MinimapDot>>,
+    transforms: Query<&Transform, (Without<MinimapPlayerName>, Without<MinimapDot>)>,
+) {
+    for (name, mut name_transform) in names.iter_mut() {
+        if let Ok(tracked_transform) = transforms.get(name.tracks_entity) {
+            name_transform.translation.x = tracked_transform.translation.x;
+            name_transform.translation.y = tracked_transform.translation.y + 150.0; // Encima del dot
         }
     }
 }
