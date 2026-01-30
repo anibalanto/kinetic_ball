@@ -20,30 +20,20 @@ jobs:
       - name: Check for server changes
         id: check
         run: |
-          # Obtener tag anterior
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           if [ -z "$PREV_TAG" ]; then
-            echo "No hay tag anterior, asumiendo cambios"
             echo "changed=true" >> $GITHUB_OUTPUT
           else
-            echo "Comparando con tag anterior: $PREV_TAG"
             CHANGES=$(git diff --name-only "$PREV_TAG"..HEAD -- kinetic_ball_server/)
             if [ -n "$CHANGES" ]; then
-              echo "Cambios detectados en kinetic_ball_server/:"
-              echo "$CHANGES"
               echo "changed=true" >> $GITHUB_OUTPUT
             else
-              echo "Sin cambios en kinetic_ball_server/"
               echo "changed=false" >> $GITHUB_OUTPUT
             fi
           fi
 
-  # ============================================================================
-  # BUILD LINUX - Server + Client (rápido, triggerea deploy)
-  # ============================================================================
   build-linux:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -73,22 +63,14 @@ jobs:
           mkdir -p out/
           cp target/x86_64-unknown-linux-gnu/release/kinetic_ball out/kinetic_ball_linux
           cp target/x86_64-unknown-linux-gnu/release/kinetic_ball_server out/kinetic_ball_server_linux
+          cp ~/.cargo/bin/matchbox_server out/matchbox_server
 
-      - name: Upload client artifact
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: binarios-x86_64-unknown-linux-gnu
+          name: binarios-linux-server
           path: out/*
 
-      - name: Upload matchbox_server (para deploy)
-        uses: actions/upload-artifact@v4
-        with:
-          name: matchbox_server
-          path: ~/.cargo/bin/matchbox_server
-
-  # ============================================================================
-  # BUILD WINDOWS + MACOS (más lentos, corren en paralelo)
-  # ============================================================================
   build-others:
     strategy:
       fail-fast: false
@@ -103,25 +85,15 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             friendly_name: kinetic_ball_macos_apple_silicon
-
     runs-on: ${{ matrix.os }}
-
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-
       - name: Build client
         run: cargo build -p kinetic_ball --release --target ${{ matrix.target }}
-
       - name: Prepare artifacts
         shell: bash
         run: |
@@ -129,41 +101,34 @@ jobs:
           EXT=""
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then EXT=".exe"; fi
           cp target/${{ matrix.target }}/release/kinetic_ball${EXT} out/${{ matrix.friendly_name }}
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: binarios-${{ matrix.target }}
           path: out/*
 
-  # ============================================================================
-  # DEPLOY FLY.IO - Apenas termina Linux build (si hay cambios en server)
-  # ============================================================================
   deploy-fly:
     needs: [build-linux, check-server-changes]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') && needs.check-server-changes.outputs.changed == 'true'
-
     steps:
       - uses: actions/checkout@v4
 
       - name: Download Linux artifacts
         uses: actions/download-artifact@v4
         with:
-          name: binarios-x86_64-unknown-linux-gnu
-          path: ./
+          name: binarios-linux-server
+          path: . # Descarga directamente en la raíz para evitar confusiones de carpetas
 
-      - name: Download matchbox_server
-        uses: actions/download-artifact@v4
-        with:
-          name: matchbox_server
-          path: ./
-
-      - name: Make binaries executable
-        run: chmod +x kinetic_ball_server_linux matchbox_server
-
-      - name: List files (Debug)
-        run: ls -la
+      - name: Prepare binaries for Docker
+        run: |
+          # Aseguramos que los archivos existan antes de continuar
+          if [ ! -f "kinetic_ball_server_linux" ] || [ ! -f "matchbox_server" ]; then
+            echo "ERROR: No se encontraron los binarios descargados."
+            ls -la
+            exit 1
+          fi
+          chmod +x kinetic_ball_server_linux matchbox_server
 
       - name: Setup Fly.io
         uses: superfly/flyctl-actions/setup-flyctl@master
@@ -173,16 +138,12 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-  # ============================================================================
-  # RELEASE - Espera a todos los builds
-  # ============================================================================
   release:
     needs: [build-linux, build-others]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -190,10 +151,6 @@ jobs:
           path: all_artifacts
           pattern: binarios-*
           merge-multiple: true
-
-      - name: List artifacts (Debug)
-        run: ls -la all_artifacts/
-
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:

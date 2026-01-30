@@ -59,3 +59,4 @@ target/criterion/
 
 # Local REPL history
 .repl_history
+.secrets
