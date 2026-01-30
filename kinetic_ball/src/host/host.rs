@@ -300,6 +300,11 @@ pub enum NetworkEvent {
         peer_id: PeerId, // Buscar por peer_id en lugar de por id
         input: PlayerInput,
     },
+    /// Input identificado por player_id directamente (para multijugador local)
+    PlayerInputById {
+        player_id: u32,
+        input: PlayerInput,
+    },
     PlayerDisconnected {
         peer_id: PeerId, // Buscar por peer_id en lugar de por id
     },

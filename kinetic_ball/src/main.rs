@@ -19,8 +19,16 @@ use bevy::math::VectorSpace;
 
 mod keybindings;
 use keybindings::{
-    key_code_display_name, load_app_config, load_keybindings, save_keybindings, AppConfig,
-    GameAction, KeyBindingsConfig, SettingsUIState,
+    key_code_display_name, load_app_config, load_gamepad_bindings_map, load_keybindings,
+    save_gamepad_bindings_map, save_keybindings, AppConfig, DetectedGamepadEvent, GameAction,
+    GamepadBindingsConfig, GamepadBindingsMap, GamepadConfigUIState, GilrsWrapper,
+    KeyBindingsConfig, RawGamepadInput, SettingsUIState,
+};
+
+mod local_players;
+use local_players::{
+    detect_gamepads, read_local_player_input, AvailableInputDevices, InputDevice, LocalPlayer,
+    LocalPlayers, LocalPlayersUIState,
 };
 
 mod host;
@@ -66,6 +74,8 @@ enum AppState {
     #[default]
     Menu,
     Settings,
+    LocalPlayersSetup,
+    GamepadConfig,
     RoomSelection,
     CreateRoom,
     HostingRoom,
@@ -259,8 +269,14 @@ fn main() {
 
     // Bevy
     println!("🎨 [Bevy] Intentando abrir ventana...");
-    App::new()
-        .insert_resource(bevy::winit::WinitSettings::game())
+    let mut app = App::new();
+
+    // Insertar gilrs wrapper solo si se inicializa correctamente
+    if let Some(gilrs) = GilrsWrapper::new() {
+        app.insert_resource(gilrs);
+    }
+
+    app.insert_resource(bevy::winit::WinitSettings::game())
         .insert_resource(ClearColor(Color::srgb(0.1, 0.1, 0.15)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -283,17 +299,26 @@ fn main() {
         .insert_resource(LoadedMap::default())
         .insert_resource(PreviousInput::default())
         .insert_resource(GameTick::default())
-        // Keybindings configurables
+        // Keybindings y Gamepad Bindings
         .insert_resource(load_keybindings())
+        .insert_resource(load_gamepad_bindings_map())
         .insert_resource(SettingsUIState::default())
+        .insert_resource(GamepadConfigUIState::default())
+        .insert_resource(DetectedGamepadEvent::default())
         // Room selection resources
         .insert_resource(RoomList::default())
         .insert_resource(RoomFetchChannel::default())
         .insert_resource(SelectedRoom::default())
         // Create room resources
         .insert_resource(CreateRoomConfig::default())
+        // Local players resources
+        .insert_resource(LocalPlayers::new(4)) // Máximo 4 jugadores locales
+        .insert_resource(AvailableInputDevices::default())
+        .insert_resource(LocalPlayersUIState::default())
         // Cargar assets embebidos al inicio (antes de todo)
         .add_systems(Startup, load_embedded_assets)
+        // Sistemas de input y detección
+        .add_systems(Update, (detect_gamepads, gilrs_event_system).chain())
         // Sistemas de menú (solo en estado Menu)
         .add_systems(OnEnter(AppState::Menu), setup_menu_camera_if_needed)
         .add_systems(
@@ -305,6 +330,24 @@ fn main() {
         .add_systems(
             EguiPrimaryContextPass,
             settings_ui.run_if(in_state(AppState::Settings)),
+        )
+        // Sistemas de configuración de jugadores locales (solo en estado LocalPlayersSetup)
+        .add_systems(
+            OnEnter(AppState::LocalPlayersSetup),
+            setup_menu_camera_if_needed,
+        )
+        .add_systems(
+            EguiPrimaryContextPass,
+            local_players_setup_ui.run_if(in_state(AppState::LocalPlayersSetup)),
+        )
+        // Sistemas de configuración de gamepad (solo en estado GamepadConfig)
+        .add_systems(
+            OnEnter(AppState::GamepadConfig),
+            setup_menu_camera_if_needed,
+        )
+        .add_systems(
+            EguiPrimaryContextPass,
+            gamepad_config_ui.run_if(in_state(AppState::GamepadConfig)),
         )
         // Sistemas de selección de sala (solo en estado RoomSelection)
         .add_systems(
@@ -348,7 +391,8 @@ fn main() {
         // Lógica de red y entrada (frecuencia fija, solo en InGame)
         .add_systems(
             FixedUpdate,
-            (handle_input, process_network_messages).run_if(in_state(AppState::InGame)),
+            (handle_multi_player_input, process_network_messages)
+                .run_if(in_state(AppState::InGame)),
         )
         // Lógica visual y renderizado (solo en InGame)
         .add_systems(
@@ -376,6 +420,60 @@ fn main() {
     println!("✅ [Bevy] App::run() ha finalizado normalmente");
 }
 
+/// Sistema que procesa los eventos de gilrs para mantener el estado actualizado
+/// y capturar inputs durante la configuración de gamepad
+fn gilrs_event_system(
+    gilrs: Option<ResMut<GilrsWrapper>>,
+    gamepad_ui_state: Res<GamepadConfigUIState>,
+    mut detected_event: ResMut<DetectedGamepadEvent>,
+) {
+    // NO limpiar el evento aquí - la UI lo limpiará cuando lo consuma
+    // Esto permite que el evento persista entre frames/schedules
+
+    if let Some(gilrs) = gilrs {
+        if let Ok(mut gilrs_instance) = gilrs.gilrs.lock() {
+            while let Some(gilrs::Event { id, event, .. }) = gilrs_instance.next_event() {
+                // Si estamos en modo rebinding, capturar el input
+                if gamepad_ui_state.is_rebinding() {
+                    match event {
+                        gilrs::EventType::ButtonPressed(button, code) => {
+                            // Usar la función que maneja botones desconocidos
+                            let idx = keybindings::gilrs_button_code_to_idx(button, code);
+                            println!(
+                                "🎮 [Gilrs] Botón detectado: {:?} code {:?} -> idx {}",
+                                button, code, idx
+                            );
+                            detected_event.input = Some((id, RawGamepadInput::Button(idx)));
+                        }
+                        gilrs::EventType::AxisChanged(axis, value, code) => {
+                            // Solo capturar si el valor es significativo
+                            if value.abs() > 0.7 {
+                                // Usar mapeo estándar o fallback al código
+                                let idx = keybindings::gilrs_axis_to_idx(axis).unwrap_or_else(|| {
+                                    // Fallback: usar el código raw
+                                    let raw: u32 = code.into_u32();
+                                    (raw & 0x07) as u8
+                                });
+                                let input = if value > 0.0 {
+                                    RawGamepadInput::AxisPositive(idx)
+                                } else {
+                                    RawGamepadInput::AxisNegative(idx)
+                                };
+                                println!(
+                                    "🎮 [Gilrs] Eje detectado: {:?} code {:?} valor {} -> {:?}",
+                                    axis, code, value, input
+                                );
+                                detected_event.input = Some((id, input));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ============================================================================
 // RECURSOS
 // ============================================================================
@@ -386,10 +484,12 @@ struct EmbeddedAssets {
     ball_texture: Handle<Image>,
 }
 
+/// Canal de comunicación con el thread de red
+/// El sender ahora envía (player_id, PlayerInput) para soportar múltiples jugadores locales
 #[derive(Resource, Default)]
 struct NetworkChannels {
     receiver: Option<Arc<Mutex<mpsc::Receiver<ServerMessage>>>>,
-    sender: Option<mpsc::Sender<PlayerInput>>,
+    sender: Option<mpsc::Sender<(u32, PlayerInput)>>,
 }
 
 #[derive(Resource)]
@@ -604,6 +704,19 @@ fn menu_ui(
 
                 ui.add_space(20.0);
 
+                if ui
+                    .add_sized(
+                        [150.0, 50.0],
+                        egui::Button::new(egui::RichText::new("Ver Players").size(20.0)),
+                    )
+                    .clicked()
+                {
+                    println!("📋 Configurando players");
+                    next_state.set(AppState::LocalPlayersSetup);
+                }
+
+                ui.add_space(20.0);
+
                 // Botón Crear Sala
                 if ui
                     .add_sized(
@@ -614,19 +727,6 @@ fn menu_ui(
                 {
                     println!("🏗️ Crear nueva sala");
                     next_state.set(AppState::CreateRoom);
-                }
-
-                ui.add_space(20.0);
-
-                // Botón Configuración
-                if ui
-                    .add_sized(
-                        [150.0, 50.0],
-                        egui::Button::new(egui::RichText::new("Teclas").size(20.0)),
-                    )
-                    .clicked()
-                {
-                    next_state.set(AppState::Settings);
                 }
             });
         });
@@ -785,9 +885,463 @@ fn settings_ui(
                     ui_state.rebinding_action = None;
                     ui_state.pending_bindings = None;
                     ui_state.status_message = None;
-                    next_state.set(AppState::Menu);
+                    next_state.set(AppState::LocalPlayersSetup);
                 }
             });
+        });
+    });
+}
+
+// ============================================================================
+// LOCAL PLAYERS SETUP SYSTEMS
+// ============================================================================
+
+/// Sistema de UI para configurar jugadores locales
+fn local_players_setup_ui(
+    mut contexts: EguiContexts,
+    mut local_players: ResMut<LocalPlayers>,
+    available_devices: Res<AvailableInputDevices>,
+    mut ui_state: ResMut<LocalPlayersUIState>,
+    config: Res<ConnectionConfig>,
+    mut next_state: ResMut<NextState<AppState>>,
+    gilrs: Option<Res<GilrsWrapper>>,
+    gamepad_bindings_map: Res<GamepadBindingsMap>,
+    mut gamepad_config_ui_state: ResMut<GamepadConfigUIState>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    egui::CentralPanel::default().show(ctx, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.add_space(30.0);
+            ui.heading(egui::RichText::new("Configurar Jugadores Locales").size(36.0));
+            ui.add_space(10.0);
+            ui.label(
+                egui::RichText::new("Agrega jugadores y asigna dispositivos de entrada")
+                    .size(14.0)
+                    .color(egui::Color32::GRAY),
+            );
+            ui.add_space(20.0);
+
+            // Mensaje de estado
+            if let Some(ref msg) = ui_state.status_message {
+                ui.label(
+                    egui::RichText::new(msg)
+                        .size(14.0)
+                        .color(egui::Color32::YELLOW),
+                );
+                ui.add_space(10.0);
+            }
+
+            // Sección: Agregar nuevo jugador
+            ui.group(|ui| {
+                ui.set_width(500.0);
+                ui.heading("Agregar Jugador");
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    ui.label("Nombre:");
+                    ui.add_sized(
+                        [200.0, 24.0],
+                        egui::TextEdit::singleline(&mut ui_state.new_player_name)
+                            .hint_text(format!("Jugador {}", local_players.count() + 1)),
+                    );
+                });
+
+                ui.add_space(5.0);
+
+                // Obtener dispositivos disponibles
+                let available = available_devices.get_available_devices(&local_players);
+
+                if available.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No hay dispositivos disponibles")
+                            .color(egui::Color32::RED),
+                    );
+                } else {
+                    ui.horizontal(|ui| {
+                        ui.label("Dispositivo:");
+                        egui::ComboBox::from_id_salt("device_selector")
+                            .selected_text(
+                                available
+                                    .get(ui_state.selected_device_index)
+                                    .map(|(_, name)| name.as_str())
+                                    .unwrap_or("Seleccionar..."),
+                            )
+                            .show_ui(ui, |ui| {
+                                for (i, (_, name)) in available.iter().enumerate() {
+                                    ui.selectable_value(
+                                        &mut ui_state.selected_device_index,
+                                        i,
+                                        name,
+                                    );
+                                }
+                            });
+                    });
+
+                    ui.add_space(10.0);
+
+                    let can_add = local_players.count() < local_players.max_players as usize
+                        && ui_state.selected_device_index < available.len();
+
+                    if ui
+                        .add_enabled(
+                            can_add,
+                            egui::Button::new(egui::RichText::new("+ Agregar Jugador").size(16.0)),
+                        )
+                        .clicked()
+                    {
+                        if let Some((device, _)) = available.get(ui_state.selected_device_index) {
+                            let name = if ui_state.new_player_name.trim().is_empty() {
+                                format!("Jugador {}", local_players.count() + 1)
+                            } else {
+                                ui_state.new_player_name.trim().to_string()
+                            };
+
+                            match local_players.add_player(
+                                name.clone(),
+                                device.clone(),
+                                gilrs.as_deref(),
+                            ) {
+                                Ok(idx) => {
+                                    ui_state.status_message =
+                                        Some(format!("Jugador '{}' agregado ({})", name, idx + 1));
+                                    ui_state.new_player_name.clear();
+                                    ui_state.selected_device_index = 0;
+                                }
+                                Err(e) => {
+                                    ui_state.status_message = Some(e.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            ui.add_space(20.0);
+
+            // Sección: Lista de jugadores configurados
+            ui.group(|ui| {
+                ui.set_width(500.0);
+                ui.heading(format!(
+                    "Jugadores Configurados ({}/{})",
+                    local_players.count(),
+                    local_players.max_players
+                ));
+                ui.add_space(10.0);
+
+                if local_players.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No hay jugadores configurados")
+                            .color(egui::Color32::GRAY),
+                    );
+                } else {
+                    let mut to_remove: Option<u8> = None;
+                    let mut to_config: Option<(usize, String)> = None;
+
+                    let mut go_to_keyboard_config = false;
+
+                    for (idx, player) in local_players.players.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{}.", player.local_index + 1))
+                                    .size(16.0)
+                                    .strong(),
+                            );
+                            ui.label(egui::RichText::new(&player.name).size(16.0));
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "[{}]",
+                                    player.input_device.display_name(&available_devices)
+                                ))
+                                .size(14.0)
+                                .color(egui::Color32::LIGHT_BLUE),
+                            );
+
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.button("X").clicked() {
+                                        to_remove = Some(player.local_index);
+                                    }
+
+                                    // Botón de configuración según tipo de dispositivo
+                                    match &player.input_device {
+                                        InputDevice::Keyboard => {
+                                            if ui
+                                                .button("⚙")
+                                                .on_hover_text("Configurar teclas")
+                                                .clicked()
+                                            {
+                                                go_to_keyboard_config = true;
+                                            }
+                                        }
+                                        InputDevice::RawGamepad(_) => {
+                                            if let Some(ref gamepad_type) = player.gamepad_type_name
+                                            {
+                                                if ui
+                                                    .button("⚙")
+                                                    .on_hover_text("Configurar controles")
+                                                    .clicked()
+                                                {
+                                                    to_config = Some((idx, gamepad_type.clone()));
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                },
+                            );
+                        });
+                    }
+
+                    if let Some(idx) = to_remove {
+                        local_players.remove_player(idx);
+                        ui_state.status_message = Some("Jugador eliminado".to_string());
+                    }
+
+                    // Manejar clic en configuración de gamepad
+                    if let Some((player_idx, gamepad_type)) = to_config {
+                        let current_bindings = gamepad_bindings_map.get_bindings(&gamepad_type);
+                        gamepad_config_ui_state.start_config(
+                            player_idx,
+                            gamepad_type,
+                            current_bindings,
+                        );
+                        next_state.set(AppState::GamepadConfig);
+                    }
+
+                    // Manejar clic en configuración de teclado
+                    if go_to_keyboard_config {
+                        next_state.set(AppState::Settings);
+                    }
+                }
+            });
+
+            ui.add_space(10.0);
+
+            // Información de gamepads detectados
+            ui.label(
+                egui::RichText::new(format!(
+                    "Gamepads detectados: {}",
+                    available_devices.gamepads.len()
+                ))
+                .size(12.0)
+                .color(egui::Color32::GRAY),
+            );
+
+            ui.add_space(30.0);
+
+            // Botones de acción
+            ui.horizontal(|ui| {
+                // Volver
+                if ui
+                    .add_sized(
+                        [120.0, 40.0],
+                        egui::Button::new(egui::RichText::new("Volver").size(18.0)),
+                    )
+                    .clicked()
+                {
+                    next_state.set(AppState::Menu);
+                }
+
+                ui.add_space(20.0);
+
+                // Continuar (ir a selección de sala)
+                let can_continue = !local_players.is_empty();
+                if ui
+                    .add_enabled(
+                        can_continue,
+                        egui::Button::new(egui::RichText::new("Continuar").size(18.0)),
+                    )
+                    .clicked()
+                {
+                    println!(
+                        "🎮 {} jugadores locales configurados, buscando salas...",
+                        local_players.count()
+                    );
+                    next_state.set(AppState::RoomSelection);
+                }
+            });
+        });
+    });
+}
+
+// ============================================================================
+// GAMEPAD CONFIG SYSTEMS
+// ============================================================================
+
+/// Sistema de UI para configuración de gamepad
+fn gamepad_config_ui(
+    mut contexts: EguiContexts,
+    mut ui_state: ResMut<GamepadConfigUIState>,
+    mut gamepad_bindings_map: ResMut<GamepadBindingsMap>,
+    mut next_state: ResMut<NextState<AppState>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut detected_event: ResMut<DetectedGamepadEvent>,
+) {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+
+    // Capturar input de gamepad si estamos en modo rebind
+    if let Some(action) = ui_state.rebinding_action {
+        // ESC cancela el rebinding
+        if keyboard.just_pressed(KeyCode::Escape) {
+            ui_state.cancel_rebind();
+            detected_event.input = None; // Limpiar evento
+        } else if let Some((_gamepad_id, raw_input)) = detected_event.input.take() {
+            // Se detectó un input de gamepad - take() consume y limpia el evento
+            println!(
+                "🎮 [UI] Asignando {:?} a '{}'",
+                raw_input,
+                action.display_name()
+            );
+            if let Some(ref mut pending) = ui_state.pending_bindings {
+                pending.set_binding(action, Some(raw_input));
+            }
+            ui_state.last_detected_input = Some(raw_input);
+            ui_state.rebinding_action = None;
+            ui_state.status_message = Some(format!(
+                "'{}' asignado a {}",
+                action.display_name(),
+                raw_input.display_name()
+            ));
+        }
+    } else {
+        // Si no estamos en rebinding, limpiar cualquier evento pendiente
+        detected_event.input = None;
+    }
+
+    egui::CentralPanel::default().show(ctx, |ui| {
+        ui.vertical_centered(|ui| {
+            ui.add_space(30.0);
+
+            // Título con nombre del gamepad
+            let gamepad_name = ui_state
+                .gamepad_type_name
+                .clone()
+                .unwrap_or_else(|| "Gamepad".to_string());
+            ui.heading(
+                egui::RichText::new(format!("Configurar: {}", gamepad_name)).size(32.0),
+            );
+            ui.add_space(20.0);
+
+            // Mensaje de estado
+            if let Some(ref msg) = ui_state.status_message {
+                ui.label(
+                    egui::RichText::new(msg)
+                        .size(16.0)
+                        .color(egui::Color32::YELLOW),
+                );
+                ui.add_space(10.0);
+            }
+
+            // Grid de bindings
+            egui::Frame::new().inner_margin(20.0).show(ui, |ui| {
+                egui::Grid::new("gamepad_bindings_grid")
+                    .num_columns(2)
+                    .spacing([40.0, 8.0])
+                    .show(ui, |ui| {
+                        let pending = ui_state
+                            .pending_bindings
+                            .clone()
+                            .unwrap_or_default();
+
+                        for action in GameAction::all() {
+                            // Nombre de la acción
+                            ui.label(egui::RichText::new(action.display_name()).size(18.0));
+
+                            // Botón con binding actual
+                            let binding = pending.get_binding(*action);
+                            let is_rebinding = ui_state.rebinding_action == Some(*action);
+
+                            let button_text = if is_rebinding {
+                                "Presiona botón/eje...".to_string()
+                            } else {
+                                binding
+                                    .map(|b| b.display_name())
+                                    .unwrap_or_else(|| "Sin asignar".to_string())
+                            };
+
+                            let button =
+                                egui::Button::new(egui::RichText::new(&button_text).size(16.0));
+
+                            if ui.add_sized([180.0, 28.0], button).clicked()
+                                && !ui_state.is_rebinding()
+                            {
+                                ui_state.start_rebind(*action);
+                            }
+
+                            ui.end_row();
+                        }
+                    });
+            });
+
+            ui.add_space(30.0);
+
+            // Botones de acción
+            ui.horizontal(|ui| {
+                // Guardar
+                if ui
+                    .add_sized(
+                        [120.0, 40.0],
+                        egui::Button::new(egui::RichText::new("Guardar").size(18.0)),
+                    )
+                    .clicked()
+                {
+                    if let (Some(ref gamepad_type), Some(ref pending)) =
+                        (&ui_state.gamepad_type_name, &ui_state.pending_bindings)
+                    {
+                        gamepad_bindings_map.set_bindings(gamepad_type.clone(), pending.clone());
+                        match save_gamepad_bindings_map(&gamepad_bindings_map) {
+                            Ok(_) => {
+                                ui_state.status_message =
+                                    Some("Configuración guardada".to_string());
+                            }
+                            Err(e) => {
+                                ui_state.status_message =
+                                    Some(format!("Error al guardar: {}", e));
+                            }
+                        }
+                    }
+                }
+
+                ui.add_space(15.0);
+
+                // Restaurar defaults
+                if ui
+                    .add_sized(
+                        [180.0, 40.0],
+                        egui::Button::new(egui::RichText::new("Restaurar Defaults").size(18.0)),
+                    )
+                    .clicked()
+                {
+                    ui_state.pending_bindings = Some(GamepadBindingsConfig::default());
+                    ui_state.status_message =
+                        Some("Restaurado a valores por defecto".to_string());
+                }
+
+                ui.add_space(15.0);
+
+                // Volver
+                if ui
+                    .add_sized(
+                        [120.0, 40.0],
+                        egui::Button::new(egui::RichText::new("Volver").size(18.0)),
+                    )
+                    .clicked()
+                {
+                    ui_state.reset();
+                    next_state.set(AppState::LocalPlayersSetup);
+                }
+            });
+
+            ui.add_space(20.0);
+
+            // Instrucciones
+            ui.label(
+                egui::RichText::new("Haz clic en una acción y luego presiona un botón o mueve un eje del gamepad")
+                    .size(12.0)
+                    .color(egui::Color32::GRAY),
+            );
         });
     });
 }
@@ -1270,7 +1824,11 @@ fn hosting_ui(
     });
 }
 
-fn start_connection(config: Res<ConnectionConfig>, mut channels: ResMut<NetworkChannels>) {
+fn start_connection(
+    config: Res<ConnectionConfig>,
+    mut channels: ResMut<NetworkChannels>,
+    local_players: Res<LocalPlayers>,
+) {
     let (network_tx, network_rx) = mpsc::channel();
     let (input_tx, input_rx) = mpsc::channel();
 
@@ -1280,7 +1838,23 @@ fn start_connection(config: Res<ConnectionConfig>, mut channels: ResMut<NetworkC
 
     let ws_url = config.ws_url();
     let room = config.room.clone();
-    let player_name = config.player_name.clone();
+
+    // Recoger los nombres de los jugadores locales
+    // Si no hay jugadores locales configurados, usar el nombre del config (modo legacy)
+    let player_names: Vec<String> = if local_players.is_empty() {
+        vec![config.player_name.clone()]
+    } else {
+        local_players
+            .players
+            .iter()
+            .map(|p| p.name.clone())
+            .collect()
+    };
+
+    println!(
+        "🌐 [Red] Iniciando conexión con {} jugadores locales",
+        player_names.len()
+    );
 
     // Iniciar hilo de red
     std::thread::spawn(move || {
@@ -1291,7 +1865,7 @@ fn start_connection(config: Res<ConnectionConfig>, mut channels: ResMut<NetworkC
             .expect("Fallo al crear Runtime de Tokio");
 
         rt.block_on(async {
-            start_webrtc_client(ws_url, room, player_name, network_tx, input_rx).await;
+            start_webrtc_client(ws_url, room, player_names, network_tx, input_rx).await;
         });
         println!("🌐 [Red] El hilo de red HA TERMINADO");
     });
@@ -1317,9 +1891,9 @@ fn check_connection(channels: Res<NetworkChannels>, mut next_state: ResMut<NextS
 async fn start_webrtc_client(
     server_url: String,
     room: String,
-    player_name: String,
+    player_names: Vec<String>,
     network_tx: mpsc::Sender<ServerMessage>,
-    input_rx: mpsc::Receiver<PlayerInput>,
+    input_rx: mpsc::Receiver<(u32, PlayerInput)>,
 ) {
     // Conectar al proxy
     let room_url = format!("{}/{}", server_url, room);
@@ -1334,34 +1908,48 @@ async fn start_webrtc_client(
     // Spawn el loop de matchbox
     tokio::spawn(loop_fut);
 
-    println!("✅ [Red] WebRTC socket creado, esperando conexión con peers...");
+    println!(
+        "✅ [Red] WebRTC socket creado, esperando conexión con peers... ({} jugadores locales)",
+        player_names.len()
+    );
 
     // El server_peer_id real se determina cuando recibimos WELCOME
     let mut server_peer_id: Option<matchbox_socket::PeerId> = None;
 
-    // Rastrear a qué peers ya enviamos JOIN
+    // Rastrear a qué peers ya enviamos JOINs
     let mut peers_joined: std::collections::HashSet<matchbox_socket::PeerId> =
         std::collections::HashSet::new();
 
+    // Contador de WELCOMEs recibidos para asociar con local_index
+    let mut welcomes_received: usize = 0;
+
     // Loop principal: recibir mensajes y enviar inputs
     loop {
-        // Procesar nuevos peers y enviar JOIN a cada uno
+        // Procesar nuevos peers y enviar JOINs para todos los jugadores locales
         socket.update_peers();
         let current_peers: Vec<_> = socket.connected_peers().collect();
 
         for peer_id in current_peers {
             if !peers_joined.contains(&peer_id) {
-                // Nuevo peer, enviar JOIN
-                let join_msg = ControlMessage::Join {
-                    player_name: player_name.clone(),
-                };
-                if let Ok(data) = bincode::serialize(&join_msg) {
-                    println!("📤 [Red] Enviando JOIN a peer {:?}...", peer_id);
-                    socket.channel_mut(0).send(data.into(), peer_id);
-                    peers_joined.insert(peer_id);
+                // Nuevo peer, enviar JOIN para cada jugador local
+                for (idx, name) in player_names.iter().enumerate() {
+                    let join_msg = ControlMessage::Join {
+                        player_name: name.clone(),
+                    };
+                    if let Ok(data) = bincode::serialize(&join_msg) {
+                        println!(
+                            "📤 [Red] Enviando JOIN #{} ({}) a peer {:?}...",
+                            idx + 1,
+                            name,
+                            peer_id
+                        );
+                        socket.channel_mut(0).send(data.into(), peer_id);
+                    }
                 }
+                peers_joined.insert(peer_id);
             }
         }
+
         // Recibir mensajes del servidor
         // Canal 0: Control messages (reliable)
         for (peer_id, packet) in socket.channel_mut(0).receive() {
@@ -1369,11 +1957,16 @@ async fn start_webrtc_client(
                 match msg {
                     ControlMessage::Welcome { player_id, map } => {
                         println!(
-                            "🎉 [Red] WELCOME recibido de peer {:?}! Player ID: {}",
-                            peer_id, player_id
+                            "🎉 [Red] WELCOME #{} recibido de peer {:?}! Player ID: {}",
+                            welcomes_received + 1,
+                            peer_id,
+                            player_id
                         );
-                        // Guardar el peer_id del servidor real
-                        server_peer_id = Some(peer_id);
+
+                        // Guardar el peer_id del servidor real (del primer WELCOME)
+                        if server_peer_id.is_none() {
+                            server_peer_id = Some(peer_id);
+                        }
 
                         // Convertir a ServerMessage para compatibilidad con el código existente
                         let server_msg = ServerMessage::Welcome { player_id, map };
@@ -1382,9 +1975,14 @@ async fn start_webrtc_client(
                         // Enviar READY al servidor real
                         let ready_msg = ControlMessage::Ready;
                         if let Ok(data) = bincode::serialize(&ready_msg) {
-                            println!("📤 [Red -> Servidor] Enviando READY...");
+                            println!(
+                                "📤 [Red -> Servidor] Enviando READY para jugador {}...",
+                                player_id
+                            );
                             socket.channel_mut(0).send(data.into(), peer_id);
                         }
+
+                        welcomes_received += 1;
                     }
                     ControlMessage::PlayerDisconnected { player_id } => {
                         println!("👋 [Red] Jugador {} se desconectó", player_id);
@@ -1431,8 +2029,8 @@ async fn start_webrtc_client(
 
         // Enviar inputs desde Bevy (solo si ya identificamos al servidor)
         if let Some(server_id) = server_peer_id {
-            while let Ok(input) = input_rx.try_recv() {
-                let input_msg = GameDataMessage::Input { input };
+            while let Ok((player_id, input)) = input_rx.try_recv() {
+                let input_msg = GameDataMessage::Input { player_id, input };
                 if let Ok(data) = bincode::serialize(&input_msg) {
                     socket.channel_mut(1).send(data.into(), server_id); // Canal 1 = unreliable
                 }
@@ -1745,93 +2343,183 @@ fn setup(mut commands: Commands, config: Res<GameConfig>, mut images: ResMut<Ass
     println!("✅ Cliente configurado y campo listo");
 }
 
-// Resource para trackear el input anterior
+// Resource para trackear el input anterior (legacy, mantenido por compatibilidad)
 #[derive(Resource, Default)]
 struct PreviousInput(PlayerInput);
 
-fn handle_input(
+/// Sistema que lee input de todos los jugadores locales y lo envía al servidor
+fn handle_multi_player_input(
     keyboard: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<&Gamepad>,
     channels: Res<NetworkChannels>,
+    local_players: Res<LocalPlayers>,
     my_player_id: Res<MyPlayerId>,
-    mut previous_input: ResMut<PreviousInput>,
+    gilrs: Option<Res<GilrsWrapper>>,
+    gamepad_bindings_map: Res<GamepadBindingsMap>,
     keybindings: Res<KeyBindingsConfig>,
     players: Query<&RemotePlayer>,
 ) {
-    let Some(my_id) = my_player_id.0 else {
-        return;
-    };
-
     let Some(ref sender) = channels.sender else {
         return;
     };
 
-    // Verificar si el jugador local está en modo cubo
-    let is_cube_mode = players
-        .iter()
-        .find(|p| p.id == my_id)
-        .map(|p| p.mode_cube_active)
-        .unwrap_or(false);
+    // Si no hay jugadores locales configurados, usar modo legacy (un jugador con teclado)
+    if local_players.is_empty() {
+        let Some(my_id) = my_player_id.0 else {
+            return;
+        };
 
-    // Detectar modificador (ControlLeft)
-    let modifier = keyboard.pressed(KeyCode::ControlLeft);
+        // Verificar si el jugador local está en modo cubo
+        let is_cube_mode = players
+            .iter()
+            .find(|p| p.id == my_id)
+            .map(|p| p.mode_cube_active)
+            .unwrap_or(false);
 
-    // Tecla wildcard: StopInteract en modo normal, Dash en modo cubo
-    let wildcard_pressed = keyboard.pressed(keybindings.wildcard.0);
+        // Leer input del teclado (modo legacy)
+        let input = local_players::read_keyboard_input(&keyboard, &keybindings, is_cube_mode);
 
-    // Mapeo de teclas configurable
-    let input = PlayerInput {
-        move_up: keyboard.pressed(keybindings.move_up.0),
-        move_down: keyboard.pressed(keybindings.move_down.0),
-        move_left: keyboard.pressed(keybindings.move_left.0),
-        move_right: keyboard.pressed(keybindings.move_right.0),
-        kick: keyboard.pressed(keybindings.kick.0) && !modifier,
-        curve_left: keyboard.pressed(keybindings.curve_left.0),
-        curve_right: keyboard.pressed(keybindings.curve_right.0),
-        stop_interact: wildcard_pressed && !is_cube_mode,
-        dash: wildcard_pressed && is_cube_mode,
-        sprint: keyboard.pressed(keybindings.sprint.0) && !modifier,
-        mode: keyboard.pressed(keybindings.mode.0),
-    };
-
-    // Enviamos input siempre, no solo cuando cambia (para mantener estado)
-    // El canal unreliable de WebRTC puede perder paquetes, así que enviamos constantemente
-    if let Err(e) = sender.send(input.clone()) {
-        println!("⚠️ [Bevy] Error enviando input al canal: {:?}", e);
+        // Enviar input con el player_id
+        if let Err(e) = sender.send((my_id, input)) {
+            println!("⚠️ [Bevy] Error enviando input al canal: {:?}", e);
+        }
+        return;
     }
-    previous_input.0 = input;
+
+    // DEBUG: Log una vez cada 60 frames aproximadamente
+    static mut FRAME_COUNT: u32 = 0;
+    unsafe {
+        FRAME_COUNT += 1;
+        if FRAME_COUNT % 120 == 0 {
+            println!(
+                "🎮 [DEBUG] {} jugadores locales configurados, gamepads en query: {}",
+                local_players.players.len(),
+                gamepads.iter().count()
+            );
+            for (i, p) in local_players.players.iter().enumerate() {
+                println!(
+                    "   Jugador {}: '{}', device={:?}, server_id={:?}",
+                    i, p.name, p.input_device, p.server_player_id
+                );
+            }
+        }
+    }
+
+    // Iterar sobre cada jugador local y enviar su input
+    for local_player in &local_players.players {
+        // Solo procesar si tiene un server_player_id asignado
+        let Some(server_id) = local_player.server_player_id else {
+            continue;
+        };
+
+        // Verificar si este jugador está en modo cubo
+        let is_cube_mode = players
+            .iter()
+            .find(|p| p.id == server_id)
+            .map(|p| p.mode_cube_active)
+            .unwrap_or(false);
+
+        // Leer input según el dispositivo asignado
+        let input = read_local_player_input(
+            local_player,
+            &keyboard,
+            &keybindings,
+            &gamepads,
+            gilrs.as_deref(),
+            &gamepad_bindings_map,
+            is_cube_mode,
+        );
+
+        // Enviar input con el player_id del servidor
+        if let Err(e) = sender.send((server_id, input)) {
+            println!(
+                "⚠️ [Bevy] Error enviando input para jugador {} al canal: {:?}",
+                server_id, e
+            );
+        }
+    }
 }
 
-fn process_network_messages(
-    mut commands: Commands,
-    embedded_assets: Res<EmbeddedAssets>,
-    mut config: ResMut<GameConfig>,
-    channels: Res<NetworkChannels>,
-    mut my_id: ResMut<MyPlayerId>,
-    mut loaded_map: ResMut<LoadedMap>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    keybindings: Res<KeyBindingsConfig>,
-    mut ball_q: Query<(&mut Interpolated, &mut Transform, &RemoteBall), Without<RemotePlayer>>,
-    mut players_q: Query<
+use bevy::ecs::system::SystemParam;
+
+#[derive(SystemParam)]
+pub struct NetworkParams<'w, 's> {
+    pub commands: Commands<'w, 's>,
+    pub embedded_assets: Res<'w, EmbeddedAssets>,
+    pub config: ResMut<'w, GameConfig>,
+    pub channels: Res<'w, NetworkChannels>,
+    pub my_id: ResMut<'w, MyPlayerId>,
+    pub loaded_map: ResMut<'w, LoadedMap>,
+    pub meshes: ResMut<'w, Assets<Mesh>>,
+    pub materials: ResMut<'w, Assets<ColorMaterial>>,
+    pub keybindings: Res<'w, KeyBindingsConfig>,
+    pub local_players: ResMut<'w, LocalPlayers>,
+    pub game_tick: ResMut<'w, GameTick>,
+}
+
+#[derive(SystemParam)]
+pub struct NetworkQueries<'w, 's> {
+    pub ball_q: Query<
+        'w,
+        's,
+        (
+            &'static mut Interpolated,
+            &'static mut Transform,
+            &'static RemoteBall,
+        ),
+        Without<RemotePlayer>,
+    >,
+    pub players_q: Query<
+        'w,
+        's,
         (
             Entity,
-            &mut Interpolated,
-            &mut Transform,
-            &mut RemotePlayer,
-            &Children,
+            &'static mut Interpolated,
+            &'static mut Transform,
+            &'static mut RemotePlayer,
+            &'static Children,
         ),
         (Without<RemoteBall>, Without<MainCamera>),
     >,
-    // Queries para actualizar colores de equipo
-    mut bar_sprites: Query<
-        &mut Sprite,
+    pub bar_sprites: Query<
+        'w,
+        's,
+        &'static mut Sprite,
         Or<(With<KickChargeBarCurveLeft>, With<KickChargeBarCurveRight>)>,
     >,
-    player_materials: Query<(&PlayerSprite, &MeshMaterial2d<ColorMaterial>)>,
-    children_query: Query<&Children>,
-    mut text_color_query: Query<&mut TextColor>,
-    mut game_tick: ResMut<GameTick>,
-) {
+    pub player_materials: Query<
+        'w,
+        's,
+        (
+            &'static PlayerSprite,
+            &'static MeshMaterial2d<ColorMaterial>,
+        ),
+    >,
+    pub children_query: Query<'w, 's, &'static Children>,
+    pub text_color_query: Query<'w, 's, &'static mut TextColor>,
+}
+
+fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQueries) {
+    // --- Re-asignación para mantener compatibilidad con tu lógica actual ---
+    let commands = &mut params.commands;
+    let embedded_assets = &params.embedded_assets;
+    let config = &mut params.config;
+    let channels = &params.channels;
+    let my_id = &mut params.my_id;
+    let loaded_map = &mut params.loaded_map;
+    let mut meshes = &mut params.meshes;
+    let mut materials = &mut params.materials;
+    let keybindings = &params.keybindings;
+    let local_players = &mut params.local_players;
+    let game_tick = &mut params.game_tick;
+
+    let ball_q = &mut queries.ball_q;
+    let players_q = &mut queries.players_q;
+    let bar_sprites = &mut queries.bar_sprites;
+    let player_materials = &queries.player_materials;
+    let children_query = &queries.children_query;
+    let text_color_query = &mut queries.text_color_query;
+
     let Some(ref receiver) = channels.receiver else {
         return;
     };
@@ -1853,29 +2541,51 @@ fn process_network_messages(
     for msg in messages {
         match msg {
             ServerMessage::Welcome { player_id, map } => {
-                println!("🎉 [Bevy] Welcome recibido. Mi PlayerID es: {}", player_id);
-                my_id.0 = Some(player_id);
+                println!("🎉 [Bevy] Welcome recibido. PlayerID: {}", player_id);
 
-                // Almacenar mapa si fue enviado
-                if let Some(received_map) = map {
-                    println!("📦 [Bevy] Mapa recibido: {}", received_map.name);
-                    println!(
-                        "   Dimensiones: width={:?}, height={:?}",
-                        received_map.width, received_map.height
-                    );
-                    println!(
-                        "   BG: width={:?}, height={:?}",
-                        received_map.bg.width, received_map.bg.height
-                    );
-                    println!(
-                        "   Vértices: {}, Segmentos: {}, Discos: {}",
-                        received_map.vertexes.len(),
-                        received_map.segments.len(),
-                        received_map.discs.len()
-                    );
-                    loaded_map.0 = Some(received_map);
-                } else {
-                    println!("🏟️  [Bevy] Usando arena por defecto");
+                // Asociar este player_id con el siguiente jugador local sin ID asignado
+                if !local_players.is_empty() {
+                    // Buscar el primer jugador local sin server_player_id asignado
+                    if let Some(local_player) = local_players
+                        .players
+                        .iter_mut()
+                        .find(|p| p.server_player_id.is_none())
+                    {
+                        local_player.server_player_id = Some(player_id);
+                        println!(
+                            "   Asociado a jugador local '{}' (índice {})",
+                            local_player.name, local_player.local_index
+                        );
+                    }
+                }
+
+                // my_id guarda el primer player_id (para compatibilidad y cámara)
+                if my_id.0.is_none() {
+                    my_id.0 = Some(player_id);
+                }
+
+                // Almacenar mapa si fue enviado (solo del primer Welcome)
+                if loaded_map.0.is_none() {
+                    if let Some(received_map) = map {
+                        println!("📦 [Bevy] Mapa recibido: {}", received_map.name);
+                        println!(
+                            "   Dimensiones: width={:?}, height={:?}",
+                            received_map.width, received_map.height
+                        );
+                        println!(
+                            "   BG: width={:?}, height={:?}",
+                            received_map.bg.width, received_map.bg.height
+                        );
+                        println!(
+                            "   Vértices: {}, Segmentos: {}, Discos: {}",
+                            received_map.vertexes.len(),
+                            received_map.segments.len(),
+                            received_map.discs.len()
+                        );
+                        loaded_map.0 = Some(received_map);
+                    } else {
+                        println!("🏟️  [Bevy] Usando arena por defecto");
+                    }
                 }
             }
             ServerMessage::GameState {

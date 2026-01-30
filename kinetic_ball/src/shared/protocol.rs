@@ -45,6 +45,7 @@ pub enum ControlMessage {
 pub enum GameDataMessage {
     // Del cliente
     Input {
+        player_id: u32,
         input: PlayerInput,
     },
     Ping {

@@ -168,12 +168,13 @@ pub fn handle_control_message_typed(
 
 pub fn handle_game_data_message_typed(
     event_tx: &mpsc::Sender<NetworkEvent>,
-    peer_id: PeerId,
+    _peer_id: PeerId,
     msg: GameDataMessage,
 ) {
     match msg {
-        GameDataMessage::Input { input } => {
-            let _ = event_tx.send(NetworkEvent::PlayerInput { peer_id, input });
+        GameDataMessage::Input { player_id, input } => {
+            // Ahora usamos el player_id del mensaje directamente
+            let _ = event_tx.send(NetworkEvent::PlayerInputById { player_id, input });
         }
         GameDataMessage::Ping { timestamp } => {
             println!("Debería responder con Pong {}", timestamp);
@@ -222,13 +223,18 @@ pub fn process_network_messages(
             }
 
             NetworkEvent::PlayerInput { peer_id, input } => {
-                // Buscar el player_id real usando el peer_id
+                // Buscar el player_id real usando el peer_id (legacy, un jugador por peer)
                 for (player, _) in players.iter() {
                     if player.peer_id == peer_id {
                         game_input.update_input(player.id, input.clone());
                         break;
                     }
                 }
+            }
+
+            NetworkEvent::PlayerInputById { player_id, input } => {
+                // Input identificado directamente por player_id (multijugador local)
+                game_input.update_input(player_id, input);
             }
 
             NetworkEvent::PlayerDisconnected { peer_id } => {

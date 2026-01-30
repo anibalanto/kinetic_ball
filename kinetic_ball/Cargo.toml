@@ -42,3 +42,6 @@ arboard = { version = "3.4", features = ["wayland-data-control"] }
 
 # File dialog para seleccionar mapas
 rfd = "0.15"
+
+# Gamepad input directo (para gamepads genéricos que gilrs/bevy no reconoce bien)
+gilrs = "0.11"
