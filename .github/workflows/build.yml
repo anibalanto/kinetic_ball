@@ -38,28 +38,71 @@ jobs:
             fi
           fi
 
-  build:
+  # ============================================================================
+  # BUILD LINUX - Server + Client (rápido, triggerea deploy)
+  # ============================================================================
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-unknown-linux-gnu
+
+      - name: Build client and server
+        run: cargo build -p kinetic_ball -p kinetic_ball_server --release --target x86_64-unknown-linux-gnu
+
+      - name: Install matchbox_server
+        run: cargo install matchbox_server
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p out/
+          cp target/x86_64-unknown-linux-gnu/release/kinetic_ball out/kinetic_ball_linux
+          cp target/x86_64-unknown-linux-gnu/release/kinetic_ball_server out/kinetic_ball_server_linux
+
+      - name: Upload client artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binarios-x86_64-unknown-linux-gnu
+          path: out/*
+
+      - name: Upload matchbox_server (para deploy)
+        uses: actions/upload-artifact@v4
+        with:
+          name: matchbox_server
+          path: ~/.cargo/bin/matchbox_server
+
+  # ============================================================================
+  # BUILD WINDOWS + MACOS (más lentos, corren en paralelo)
+  # ============================================================================
+  build-others:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            friendly_name: kinetic_ball_linux
-            server_name: kinetic_ball_server_linux
-            build_server: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             friendly_name: kinetic_ball.exe
-            build_server: false
           - os: macos-latest
             target: x86_64-apple-darwin
             friendly_name: kinetic_ball_macos_intel
-            build_server: false
           - os: macos-latest
             target: aarch64-apple-darwin
             friendly_name: kinetic_ball_macos_apple_silicon
-            build_server: false
 
     runs-on: ${{ matrix.os }}
 
@@ -71,30 +114,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install Linux dependencies
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev
-
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
 
-      # Compilación inteligente según la matriz
-      - name: Build projects
-        shell: bash
-        run: |
-          ARGS="-p kinetic_ball"
-          if [ "${{ matrix.build_server }}" = "true" ]; then
-            ARGS="$ARGS -p kinetic_ball_server"
-          fi
-          cargo build $ARGS --release --target ${{ matrix.target }}
-
-      - name: Install matchbox_server
-        if: matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(github.ref, 'refs/tags/v')
-        run: cargo install matchbox_server
+      - name: Build client
+        run: cargo build -p kinetic_ball --release --target ${{ matrix.target }}
 
       - name: Prepare artifacts
         shell: bash
@@ -102,14 +128,7 @@ jobs:
           mkdir -p out/
           EXT=""
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then EXT=".exe"; fi
-
-          # Copiamos el cliente con nombre amigable
           cp target/${{ matrix.target }}/release/kinetic_ball${EXT} out/${{ matrix.friendly_name }}
-
-          # Copiamos el servidor solo si se buildeó
-          if [ "${{ matrix.build_server }}" = "true" ]; then
-            cp target/${{ matrix.target }}/release/kinetic_ball_server${EXT} out/${{ matrix.server_name }}
-          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -117,18 +136,48 @@ jobs:
           name: binarios-${{ matrix.target }}
           path: out/*
 
-      - name: List files (Debug)
-        run: ls -R
+  # ============================================================================
+  # DEPLOY FLY.IO - Apenas termina Linux build (si hay cambios en server)
+  # ============================================================================
+  deploy-fly:
+    needs: [build-linux, check-server-changes]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') && needs.check-server-changes.outputs.changed == 'true'
 
-      - name: Upload matchbox_server (solo para deploy)
-        if: matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: binarios-x86_64-unknown-linux-gnu
+          path: ./
+
+      - name: Download matchbox_server
+        uses: actions/download-artifact@v4
         with:
           name: matchbox_server
-          path: ~/.cargo/bin/matchbox_server
+          path: ./
 
+      - name: Make binaries executable
+        run: chmod +x kinetic_ball_server_linux matchbox_server
+
+      - name: List files (Debug)
+        run: ls -la
+
+      - name: Setup Fly.io
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        run: flyctl deploy --local-only --no-cache
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  # ============================================================================
+  # RELEASE - Espera a todos los builds
+  # ============================================================================
   release:
-    needs: build
+    needs: [build-linux, build-others]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -142,39 +191,11 @@ jobs:
           pattern: binarios-*
           merge-multiple: true
 
+      - name: List artifacts (Debug)
+        run: ls -la all_artifacts/
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: all_artifacts/*
           generate_release_notes: true
-
-  deploy-fly:
-    needs: [build, check-server-changes]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') && needs.check-server-changes.outputs.changed == 'true'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: kinetic_ball_server_linux
-          path: ./
-
-      - name: Download matchbox_server
-        uses: actions/download-artifact@v4
-        with:
-          name: matchbox_server
-          path: ./
-
-      - name: List files (Debug)
-        run: ls -R
-
-      - name: Setup Fly.io
-        uses: superfly/flyctl-actions/setup-flyctl@master
-
-      - name: Deploy to Fly.io
-        run: flyctl deploy --local-only --no-cache
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
