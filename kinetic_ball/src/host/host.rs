@@ -85,7 +85,13 @@ pub fn host(
     let (outgoing_tx, outgoing_rx) = mpsc::channel();
 
     // Clonar loaded_map para usarlo en ambos lugares
-    let network_state = Arc::new(Mutex::new(NetworkState { next_player_id: 1 }));
+    // La versión mínima del cliente es la versión actual del protocolo
+    let min_version = protocol::ProtocolVersion::current();
+    println!("📋 Versión del servidor: {}", min_version);
+    let network_state = Arc::new(Mutex::new(NetworkState {
+        next_player_id: 1,
+        min_client_version: min_version,
+    }));
 
     // Iniciar servidor WebRTC (se conecta al proxy)
     let room = room.clone();
@@ -288,6 +294,8 @@ pub struct Ball {
 
 pub struct NetworkState {
     pub next_player_id: u32,
+    /// Versión mínima del cliente requerida por este servidor
+    pub min_client_version: protocol::ProtocolVersion,
 }
 
 pub enum NetworkEvent {

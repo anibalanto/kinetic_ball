@@ -12,7 +12,7 @@ use clap::Parser;
 use matchbox_socket::WebRtcSocket;
 use shared::movements::{get_movement, AnimatedProperty};
 use shared::protocol::PlayerMovement;
-use shared::protocol::{ControlMessage, GameConfig, GameDataMessage, PlayerInput, ServerMessage};
+use shared::protocol::{ControlMessage, GameConfig, GameDataMessage, PlayerInput, ProtocolVersion, ServerMessage};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -104,6 +104,8 @@ struct RoomInfo {
     current_players: u8,
     map_name: Option<String>,
     status: RoomStatus,
+    #[serde(default)]
+    min_version: Option<String>,
 }
 
 #[derive(Resource, Default)]
@@ -1651,6 +1653,13 @@ fn room_selection_ui(
                                             .color(egui::Color32::GRAY),
                                     );
                                 }
+                                if let Some(ref version) = room.min_version {
+                                    ui.label(
+                                        egui::RichText::new(format!("v{}", version))
+                                            .size(12.0)
+                                            .color(egui::Color32::LIGHT_BLUE),
+                                    );
+                                }
                             });
 
                             // Handle clicks
@@ -1994,14 +2003,17 @@ async fn start_webrtc_client(
             if !peers_joined.contains(&peer_id) {
                 // Nuevo peer, enviar JOIN para cada jugador local
                 for (idx, name) in player_names.iter().enumerate() {
+                    let client_version = ProtocolVersion::current();
                     let join_msg = ControlMessage::Join {
                         player_name: name.clone(),
+                        client_version: Some(client_version),
                     };
                     if let Ok(data) = bincode::serialize(&join_msg) {
                         println!(
-                            "📤 [Red] Enviando JOIN #{} ({}) a peer {:?}...",
+                            "📤 [Red] Enviando JOIN #{} ({}) v{} a peer {:?}...",
                             idx + 1,
                             name,
+                            client_version,
                             peer_id
                         );
                         socket.channel_mut(0).send(data.into(), peer_id);
@@ -2048,6 +2060,27 @@ async fn start_webrtc_client(
                     ControlMessage::PlayerDisconnected { player_id } => {
                         println!("👋 [Red] Jugador {} se desconectó", player_id);
                         let _ = network_tx.send(ServerMessage::PlayerDisconnected { player_id });
+                    }
+                    ControlMessage::VersionMismatch {
+                        client_version,
+                        min_required,
+                        message,
+                    } => {
+                        println!(
+                            "❌ [Red] VERSION INCOMPATIBLE: Tu versión {} es menor que la mínima requerida {}",
+                            client_version, min_required
+                        );
+                        println!("   {}", message);
+                        let _ = network_tx.send(ServerMessage::Error {
+                            message: format!(
+                                "Versión incompatible: tienes v{}, se requiere v{} o superior. {}",
+                                client_version, min_required, message
+                            ),
+                        });
+                    }
+                    ControlMessage::Error { message } => {
+                        println!("❌ [Red] Error del servidor: {}", message);
+                        let _ = network_tx.send(ServerMessage::Error { message });
                     }
                     _ => {}
                 }

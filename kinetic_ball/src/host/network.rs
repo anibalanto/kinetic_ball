@@ -38,12 +38,15 @@ pub fn start_webrtc_server(
         let http_scheme = if is_localhost { "http" } else { "https" };
         let ws_scheme = if is_localhost { "ws" } else { "wss" };
         let http_url = format!("{}://{}", http_scheme, server_host);
+        // Obtener versión mínima del servidor para enviar al proxy
+        let min_version_str = protocol::ProtocolVersion::current().to_string();
         let room_url = match register_room_with_proxy(
             &http_url,
             &room,
             &room_name,
             max_players,
             map_name.as_deref(),
+            Some(&min_version_str),
         )
         .await
         {
@@ -91,7 +94,13 @@ pub fn start_webrtc_server(
             // Recibir mensajes del canal 0 (reliable - control)
             for (peer_id, packet) in socket.channel_mut(0).receive() {
                 if let Ok(msg) = bincode::deserialize::<ControlMessage>(&packet) {
-                    handle_control_message_typed(&event_tx, &state, peer_id, msg);
+                    // Manejar mensaje y obtener posible respuesta
+                    if let Some(response) = handle_control_message_typed(&event_tx, &state, peer_id, msg) {
+                        // Enviar respuesta al cliente (ej: VersionMismatch)
+                        if let Ok(data) = bincode::serialize(&response) {
+                            socket.channel_mut(0).send(data.into(), peer_id);
+                        }
+                    }
                 }
             }
 
@@ -130,38 +139,64 @@ pub fn start_webrtc_server(
     });
 }
 
+/// Maneja un mensaje de control y devuelve una respuesta opcional para enviar al cliente
 pub fn handle_control_message_typed(
     event_tx: &mpsc::Sender<NetworkEvent>,
     state: &Arc<Mutex<NetworkState>>,
     peer_id: PeerId,
     msg: ControlMessage,
-) {
+) -> Option<ControlMessage> {
     match msg {
-        ControlMessage::Join { player_name } => {
-            let id = {
+        ControlMessage::Join { player_name, client_version } => {
+            // Verificar versión del cliente
+            let (min_version, id) = {
                 let mut s = state.lock().unwrap();
+
+                // Obtener versión mínima
+                let min_version = s.min_client_version;
+
+                // Verificar si el cliente tiene una versión compatible
+                if let Some(cv) = client_version {
+                    if !cv.is_compatible_with(&min_version) {
+                        println!(
+                            "❌ Cliente rechazado: versión {} es menor que la mínima {}",
+                            cv, min_version
+                        );
+                        return Some(ControlMessage::VersionMismatch {
+                            client_version: cv,
+                            min_required: min_version,
+                            message: "Por favor actualiza tu cliente a la última versión.".to_string(),
+                        });
+                    }
+                    println!("✅ Cliente versión {} aceptado (mínima: {})", cv, min_version);
+                } else {
+                    // Cliente antiguo sin versión - podrías rechazarlo o aceptarlo
+                    println!("⚠️  Cliente sin versión (legacy), aceptando...");
+                }
+
                 let id = s.next_player_id;
                 s.next_player_id += 1;
-                id
+                (min_version, id)
             };
 
             println!("🎮 Player {} joined: {}", id, player_name);
-
-            // Enviar Welcome de vuelta (esto lo maneja broadcast_game_state por ahora)
-            // TODO: Implementar envío directo de Welcome a este peer
 
             let _ = event_tx.send(NetworkEvent::NewPlayer {
                 id,
                 name: player_name,
                 peer_id,
             });
+
+            None // El Welcome se envía desde process_network_messages
         }
         ControlMessage::Ready => {
             println!("✅ Player with peer_id {:?} ready", peer_id);
             let _ = event_tx.send(NetworkEvent::PlayerReady { peer_id });
+            None
         }
         _ => {
             // Otros mensajes de control del servidor no deberían venir del cliente
+            None
         }
     }
 }
@@ -412,6 +447,7 @@ struct CreateRoomRequest {
     name: String,
     max_players: u8,
     map_name: Option<String>,
+    min_version: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -425,6 +461,7 @@ async fn register_room_with_proxy(
     room_name: &str,
     max_players: u8,
     map_name: Option<&str>,
+    min_version: Option<&str>,
 ) -> Result<String, String> {
     let client = reqwest::Client::new();
     let url = format!("{}/api/rooms", http_url);
@@ -434,6 +471,7 @@ async fn register_room_with_proxy(
         name: room_name.to_string(),
         max_players,
         map_name: map_name.map(|s| s.to_string()),
+        min_version: min_version.map(|s| s.to_string()),
     };
 
     println!(

@@ -21,10 +21,19 @@ pub struct RoomInfo {
     pub current_players: u8,
     pub map_name: Option<String>,
     pub status: RoomStatus,
+    /// Versión mínima requerida del cliente (formato "major.minor.patch")
+    #[serde(default)]
+    pub min_version: Option<String>,
 }
 
 impl RoomInfo {
-    pub fn new(room_id: String, name: String, max_players: u8, map_name: Option<String>) -> Self {
+    pub fn new(
+        room_id: String,
+        name: String,
+        max_players: u8,
+        map_name: Option<String>,
+        min_version: Option<String>,
+    ) -> Self {
         Self {
             room_id,
             name,
@@ -32,6 +41,7 @@ impl RoomInfo {
             current_players: 0,
             map_name,
             status: RoomStatus::Open,
+            min_version,
         }
     }
 
@@ -66,6 +76,9 @@ pub struct CreateRoomRequest {
     pub name: String,
     pub max_players: u8,
     pub map_name: Option<String>,
+    /// Versión mínima requerida del cliente (formato "major.minor.patch")
+    #[serde(default)]
+    pub min_version: Option<String>,
 }
 
 /// Response for room creation
@@ -110,6 +123,7 @@ impl AppState {
             request.name,
             request.max_players,
             request.map_name,
+            request.min_version,
         );
         rooms.insert(request.room_id.clone(), room);
 

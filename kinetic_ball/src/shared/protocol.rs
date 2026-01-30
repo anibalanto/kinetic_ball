@@ -6,6 +6,56 @@ use bevy::{
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
+// VERSION DEL PROTOCOLO
+// ============================================================================
+
+/// Versión del cliente/protocolo (semver)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProtocolVersion {
+    pub major: u16,
+    pub minor: u16,
+    pub patch: u16,
+}
+
+impl ProtocolVersion {
+    pub const fn new(major: u16, minor: u16, patch: u16) -> Self {
+        Self { major, minor, patch }
+    }
+
+    /// Versión actual del cliente (se obtiene de Cargo.toml en tiempo de compilación)
+    pub fn current() -> Self {
+        Self::new(
+            env!("CARGO_PKG_VERSION_MAJOR").parse::<u16>().unwrap_or(0),
+            env!("CARGO_PKG_VERSION_MINOR").parse::<u16>().unwrap_or(0),
+            env!("CARGO_PKG_VERSION_PATCH").parse::<u16>().unwrap_or(0),
+        )
+    }
+
+    /// Verifica si esta versión es compatible con la versión mínima requerida
+    pub fn is_compatible_with(&self, min_version: &ProtocolVersion) -> bool {
+        if self.major != min_version.major {
+            return self.major > min_version.major;
+        }
+        if self.minor != min_version.minor {
+            return self.minor > min_version.minor;
+        }
+        self.patch >= min_version.patch
+    }
+}
+
+impl std::fmt::Display for ProtocolVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
+    }
+}
+
+impl Default for ProtocolVersion {
+    fn default() -> Self {
+        Self::new(0, 1, 0)
+    }
+}
+
+// ============================================================================
 // NUEVOS MENSAJES PARA WEBRTC (Canales Separados)
 // ============================================================================
 
@@ -15,6 +65,9 @@ pub enum ControlMessage {
     // Del cliente
     Join {
         player_name: String,
+        /// Versión del cliente (opcional para compatibilidad con clientes antiguos)
+        #[serde(default)]
+        client_version: Option<ProtocolVersion>,
     },
     Ready,
 
@@ -36,6 +89,12 @@ pub enum ControlMessage {
         movement_id: u8,
     },
     Error {
+        message: String,
+    },
+    /// Versión incompatible - el cliente debe actualizarse
+    VersionMismatch {
+        client_version: ProtocolVersion,
+        min_required: ProtocolVersion,
         message: String,
     },
 }
