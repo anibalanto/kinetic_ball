@@ -27,8 +27,8 @@ use keybindings::{
 
 mod local_players;
 use local_players::{
-    detect_gamepads, read_local_player_input, AvailableInputDevices, InputDevice, LocalPlayer,
-    LocalPlayers, LocalPlayersUIState,
+    detect_gamepads, idx_to_gilrs_axis, read_local_player_input, AvailableInputDevices,
+    InputDevice, LocalPlayer, LocalPlayers, LocalPlayersUIState,
 };
 
 mod host;
@@ -449,11 +449,12 @@ fn gilrs_event_system(
                             // Solo capturar si el valor es significativo
                             if value.abs() > 0.7 {
                                 // Usar mapeo estándar o fallback al código
-                                let idx = keybindings::gilrs_axis_to_idx(axis).unwrap_or_else(|| {
-                                    // Fallback: usar el código raw
-                                    let raw: u32 = code.into_u32();
-                                    (raw & 0x07) as u8
-                                });
+                                let idx =
+                                    keybindings::gilrs_axis_to_idx(axis).unwrap_or_else(|| {
+                                        // Fallback: usar el código raw
+                                        let raw: u32 = code.into_u32();
+                                        (raw & 0x07) as u8
+                                    });
                                 let input = if value > 0.0 {
                                     RawGamepadInput::AxisPositive(idx)
                                 } else {
@@ -587,9 +588,16 @@ struct MinimapDot {
 #[derive(Component)]
 struct MinimapFieldBackground;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CurveAction {
+    Left,
+    Right,
+}
+
 #[derive(Component)]
 pub struct KeyVisual {
-    pub key_code: KeyCode,
+    player_id: u32,
+    action: CurveAction,
 }
 
 // ============================================================================
@@ -1219,9 +1227,7 @@ fn gamepad_config_ui(
                 .gamepad_type_name
                 .clone()
                 .unwrap_or_else(|| "Gamepad".to_string());
-            ui.heading(
-                egui::RichText::new(format!("Configurar: {}", gamepad_name)).size(32.0),
-            );
+            ui.heading(egui::RichText::new(format!("Configurar: {}", gamepad_name)).size(32.0));
             ui.add_space(20.0);
 
             // Mensaje de estado
@@ -1240,10 +1246,7 @@ fn gamepad_config_ui(
                     .num_columns(2)
                     .spacing([40.0, 8.0])
                     .show(ui, |ui| {
-                        let pending = ui_state
-                            .pending_bindings
-                            .clone()
-                            .unwrap_or_default();
+                        let pending = ui_state.pending_bindings.clone().unwrap_or_default();
 
                         for action in GameAction::all() {
                             // Nombre de la acción
@@ -1297,8 +1300,7 @@ fn gamepad_config_ui(
                                     Some("Configuración guardada".to_string());
                             }
                             Err(e) => {
-                                ui_state.status_message =
-                                    Some(format!("Error al guardar: {}", e));
+                                ui_state.status_message = Some(format!("Error al guardar: {}", e));
                             }
                         }
                     }
@@ -1315,8 +1317,7 @@ fn gamepad_config_ui(
                     .clicked()
                 {
                     ui_state.pending_bindings = Some(GamepadBindingsConfig::default());
-                    ui_state.status_message =
-                        Some("Restaurado a valores por defecto".to_string());
+                    ui_state.status_message = Some("Restaurado a valores por defecto".to_string());
                 }
 
                 ui.add_space(15.0);
@@ -1338,9 +1339,11 @@ fn gamepad_config_ui(
 
             // Instrucciones
             ui.label(
-                egui::RichText::new("Haz clic en una acción y luego presiona un botón o mueve un eje del gamepad")
-                    .size(12.0)
-                    .color(egui::Color32::GRAY),
+                egui::RichText::new(
+                    "Haz clic en una acción y luego presiona un botón o mueve un eje del gamepad",
+                )
+                .size(12.0)
+                .color(egui::Color32::GRAY),
             );
         });
     });
@@ -2052,9 +2055,10 @@ async fn start_webrtc_client(
 fn spawn_key_visual_2d(
     parent: &mut ChildSpawnerCommands,
     key_text: &str,
-    key_code: KeyCode,
+    player_id: u32,
+    action: CurveAction,
     translation: Vec3,
-    rotation: Quat, // <--- Reincorporado
+    rotation: Quat,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
     render_layers: RenderLayers,
@@ -2070,7 +2074,7 @@ fn spawn_key_visual_2d(
 
     parent
         .spawn((
-            KeyVisual { key_code },
+            KeyVisual { player_id, action },
             Transform {
                 translation,
                 rotation, // <--- Aplicamos la rotación aquí
@@ -2453,6 +2457,7 @@ pub struct NetworkParams<'w, 's> {
     pub meshes: ResMut<'w, Assets<Mesh>>,
     pub materials: ResMut<'w, Assets<ColorMaterial>>,
     pub keybindings: Res<'w, KeyBindingsConfig>,
+    pub gamepad_bindings_map: Res<'w, GamepadBindingsMap>,
     pub local_players: ResMut<'w, LocalPlayers>,
     pub game_tick: ResMut<'w, GameTick>,
 }
@@ -2512,6 +2517,7 @@ fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQueri
     let keybindings = &params.keybindings;
     let local_players = &mut params.local_players;
     let game_tick = &mut params.game_tick;
+    let gamepad_bindings_map = params.gamepad_bindings_map;
 
     let ball_q = &mut queries.ball_q;
     let players_q = &mut queries.players_q;
@@ -2730,8 +2736,11 @@ fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQueri
             if !found && !spawned_this_frame.contains(&ps.id) {
                 spawned_this_frame.insert(ps.id);
 
-                // Determinar si es el jugador local
-                let is_local = my_id.0 == Some(ps.id);
+                // Determinar si es un jugador local (cualquiera de los jugadores locales)
+                let is_local = local_players
+                    .players
+                    .iter()
+                    .any(|lp| lp.server_player_id == Some(ps.id));
 
                 let public_player_layers = if is_local {
                     RenderLayers::from_layers(&[0, 2]) // Visible en cámara principal y detalle
@@ -2742,7 +2751,7 @@ fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQueri
                 let private_player_layers = if is_local {
                     RenderLayers::from_layers(&[0, 2]) // Visible en cámara principal y detalle
                 } else {
-                    RenderLayers::none() // No visibel
+                    RenderLayers::none() // No visible
                 };
 
                 let preview_player_layers = if is_local {
@@ -2927,16 +2936,58 @@ fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQueri
                             RenderLayers::layer(0),
                         ));
 
-                        // Indicadores de teclas de curva (solo para jugador local)
-                        let angle_90 = std::f32::consts::FRAC_PI_2;
-                        let curve_left_text = key_code_display_name(keybindings.curve_left.0);
-                        let curve_right_text = key_code_display_name(keybindings.curve_right.0);
+                        // Indicadores de teclas/botones de curva (solo para jugador local)
+                        // Buscar el jugador local correspondiente para saber qué tipo de input usa
+                        let local_player_opt = local_players
+                            .players
+                            .iter()
+                            .find(|lp| lp.server_player_id == Some(ps.id));
 
-                        // Tecla izquierda (curve_left)
+                        let (curve_left_text, curve_right_text) =
+                            if let Some(local_player) = local_player_opt {
+                                match &local_player.input_device {
+                                    InputDevice::RawGamepad(_) => {
+                                        // Usar bindings del gamepad
+                                        let gamepad_bindings = local_player
+                                            .gamepad_type_name
+                                            .as_ref()
+                                            .map(|name| gamepad_bindings_map.get_bindings(name))
+                                            .unwrap_or_default();
+
+                                        let left = gamepad_bindings
+                                            .curve_left
+                                            .map(|b| b.display_name())
+                                            .unwrap_or_else(|| "?".to_string());
+                                        let right = gamepad_bindings
+                                            .curve_right
+                                            .map(|b| b.display_name())
+                                            .unwrap_or_else(|| "?".to_string());
+                                        (left, right)
+                                    }
+                                    _ => {
+                                        // Usar bindings del teclado
+                                        (
+                                            key_code_display_name(keybindings.curve_left.0),
+                                            key_code_display_name(keybindings.curve_right.0),
+                                        )
+                                    }
+                                }
+                            } else {
+                                // Fallback a teclado
+                                (
+                                    key_code_display_name(keybindings.curve_left.0),
+                                    key_code_display_name(keybindings.curve_right.0),
+                                )
+                            };
+
+                        let angle_90 = std::f32::consts::FRAC_PI_2;
+
+                        // Tecla/botón izquierda (curve_left)
                         spawn_key_visual_2d(
                             parent,
                             &curve_left_text,
-                            keybindings.curve_left.0,
+                            ps.id,
+                            CurveAction::Left,
                             Vec3::new(
                                 config.sphere_radius / 2.0,
                                 -config.sphere_radius * 2.0,
@@ -2948,11 +2999,12 @@ fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQueri
                             private_player_layers.clone(),
                         );
 
-                        // Tecla derecha (curve_right)
+                        // Tecla/botón derecha (curve_right)
                         spawn_key_visual_2d(
                             parent,
                             &curve_right_text,
-                            keybindings.curve_right.0,
+                            ps.id,
+                            CurveAction::Right,
                             Vec3::new(config.sphere_radius / 2.0, config.sphere_radius * 2.0, 50.0),
                             Quat::from_rotation_z(-angle_90),
                             &mut meshes,
@@ -3857,18 +3909,68 @@ fn animate_keys(
     key_query: Query<(&KeyVisual, &Children)>,
     mut transform_query: Query<&mut Transform>,
     time: Res<Time>,
+    local_players: Res<LocalPlayers>,
+    keybindings: Res<KeyBindingsConfig>,
+    gamepad_bindings_map: Res<GamepadBindingsMap>,
+    gilrs: Option<Res<GilrsWrapper>>,
 ) {
+    // Pre-cargar el estado de gilrs si está disponible
+    let gilrs_guard = gilrs.as_ref().and_then(|g| g.gilrs.lock().ok());
+
     for (key_visual, children) in key_query.iter() {
         // El cuerpo móvil es el segundo hijo (índice 1) según nuestro spawn_key_visual_2d
         if let Some(&body_entity) = children.get(1) {
             if let Ok(mut transform) = transform_query.get_mut(body_entity) {
-                // Si la tecla está presionada, el objetivo es -4.0 (hundida hacia la sombra)
-                // Si no, el objetivo es 0.0 (posición original)
-                let target_y = if keyboard_input.pressed(key_visual.key_code) {
-                    -4.0
+                // Buscar el jugador local correspondiente
+                let local_player = local_players
+                    .players
+                    .iter()
+                    .find(|lp| lp.server_player_id == Some(key_visual.player_id));
+
+                // Determinar si el botón está presionado
+                let is_pressed = if let Some(lp) = local_player {
+                    match &lp.input_device {
+                        InputDevice::Keyboard => {
+                            // Usar keybindings de teclado
+                            let key_code = match key_visual.action {
+                                CurveAction::Left => keybindings.curve_left.0,
+                                CurveAction::Right => keybindings.curve_right.0,
+                            };
+                            keyboard_input.pressed(key_code)
+                        }
+                        InputDevice::RawGamepad(gamepad_id) => {
+                            // Usar bindings del gamepad
+                            if let Some(ref gilrs_instance) = gilrs_guard {
+                                if let Some(gamepad) = gilrs_instance.connected_gamepad(*gamepad_id)
+                                {
+                                    let bindings = lp
+                                        .gamepad_type_name
+                                        .as_ref()
+                                        .map(|name| gamepad_bindings_map.get_bindings(name))
+                                        .unwrap_or_default();
+
+                                    let binding = match key_visual.action {
+                                        CurveAction::Left => &bindings.curve_left,
+                                        CurveAction::Right => &bindings.curve_right,
+                                    };
+
+                                    is_gamepad_binding_active(gamepad, binding)
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false,
+                    }
                 } else {
-                    0.0
+                    false
                 };
+
+                // Si el botón está presionado, el objetivo es -4.0 (hundida hacia la sombra)
+                // Si no, el objetivo es 0.0 (posición original)
+                let target_y = if is_pressed { -4.0 } else { 0.0 };
 
                 // Usamos un lerp suave para que la tecla no "teletransporte",
                 // sino que se sienta elástica y física.
@@ -3877,5 +3979,43 @@ fn animate_keys(
                     + (target_y - transform.translation.y) * speed * time.delta_secs();
             }
         }
+    }
+}
+
+/// Helper para verificar si un binding de gamepad está activo
+fn is_gamepad_binding_active(
+    gamepad: gilrs::Gamepad<'_>,
+    binding: &Option<RawGamepadInput>,
+) -> bool {
+    if let Some(b) = binding {
+        match b {
+            RawGamepadInput::Button(idx) => {
+                // Verificar si el botón está presionado
+                for (code, data) in gamepad.state().buttons() {
+                    if data.is_pressed() {
+                        let raw_code: u32 = code.into_u32();
+                        let button_idx = if raw_code >= 288 && raw_code < 320 {
+                            (raw_code - 288) as u8
+                        } else if raw_code >= 304 && raw_code < 320 {
+                            (raw_code - 304) as u8
+                        } else {
+                            (raw_code & 0x1F) as u8
+                        };
+                        if button_idx == *idx {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            RawGamepadInput::AxisPositive(idx) => {
+                idx_to_gilrs_axis(*idx as usize).map_or(false, |ax| gamepad.value(ax) > 0.5)
+            }
+            RawGamepadInput::AxisNegative(idx) => {
+                idx_to_gilrs_axis(*idx as usize).map_or(false, |ax| gamepad.value(ax) < -0.5)
+            }
+        }
+    } else {
+        false
     }
 }

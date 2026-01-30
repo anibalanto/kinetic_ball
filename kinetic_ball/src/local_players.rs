@@ -462,7 +462,7 @@ fn idx_to_gilrs_button(idx: usize) -> Option<gilrs::Button> {
     }
 }
 
-fn idx_to_gilrs_axis(idx: usize) -> Option<gilrs::Axis> {
+pub fn idx_to_gilrs_axis(idx: usize) -> Option<gilrs::Axis> {
     use gilrs::Axis::*;
     match idx {
         0 => Some(LeftStickX),

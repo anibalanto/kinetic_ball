@@ -445,9 +445,9 @@ pub enum RawGamepadInput {
 impl RawGamepadInput {
     pub fn display_name(&self) -> String {
         match self {
-            RawGamepadInput::Button(n) => format!("Botón {}", n),
-            RawGamepadInput::AxisPositive(n) => format!("Eje {}+", n),
-            RawGamepadInput::AxisNegative(n) => format!("Eje {}-", n),
+            RawGamepadInput::Button(n) => format!("B{}", n),
+            RawGamepadInput::AxisPositive(n) => format!("X{}+", n),
+            RawGamepadInput::AxisNegative(n) => format!("X{}-", n),
         }
     }
 }
@@ -660,10 +660,7 @@ pub struct GamepadBindingsMap {
 impl GamepadBindingsMap {
     /// Obtiene los bindings para un tipo de gamepad, o los defaults si no existe
     pub fn get_bindings(&self, gamepad_type: &str) -> GamepadBindingsConfig {
-        self.bindings
-            .get(gamepad_type)
-            .cloned()
-            .unwrap_or_default()
+        self.bindings.get(gamepad_type).cloned().unwrap_or_default()
     }
 
     /// Establece los bindings para un tipo de gamepad
