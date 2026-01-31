@@ -573,7 +573,6 @@ pub fn auto_touch_ball_while_running(
         if let Ok((player_transform, player_velocity)) = sphere_query.get(player.sphere) {
             let run_normalized_velocity = player_velocity.linvel.length()
                 / (config.player_speed_walking * config.run_coeficient);
-            println!("normalized_velocity {}", run_normalized_velocity);
             if run_normalized_velocity < 0.9 {
                 continue;
             }

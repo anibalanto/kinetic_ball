@@ -1,9 +1,12 @@
+use bevy::asset::uuid_handle;
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::{visibility::RenderLayers, RenderTarget, ScalingMode, Viewport};
+use bevy::camera::{visibility::RenderLayers, RenderTarget, ScalingMode};
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::prelude::*;
-use bevy::render::render_resource::{TextureDimension, TextureFormat, TextureUsages};
+use bevy::render::render_resource::{AsBindGroup, TextureDimension, TextureFormat, TextureUsages};
+use bevy::shader::{Shader, ShaderRef};
 use bevy::sprite::Anchor;
+use bevy::sprite_render::{Material2d, Material2dPlugin};
 use bevy::ui::widget::ViewportNode;
 use bevy::ui::UiTargetCamera;
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
@@ -12,7 +15,10 @@ use clap::Parser;
 use matchbox_socket::WebRtcSocket;
 use shared::movements::{get_movement, AnimatedProperty};
 use shared::protocol::PlayerMovement;
-use shared::protocol::{ControlMessage, GameConfig, GameDataMessage, PlayerInput, ProtocolVersion, ServerMessage};
+use shared::protocol::{
+    ControlMessage, GameConfig, GameDataMessage, PlayerInput, ProtocolVersion, ServerMessage,
+};
+use std::f32::consts::FRAC_PI_2;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -41,6 +47,12 @@ mod shared;
 
 const BALL_PNG: &[u8] = include_bytes!("../assets/ball.png");
 const DEFAULT_MAP: &str = include_str!("../assets/cancha_grande.hbs");
+const SPLIT_SCREEN_SHADER_SRC: &str =
+    include_str!("../assets/shaders/split_screen_compositor.wgsl");
+
+// Handle constante para el shader de split-screen (usando UUID fijo)
+const SPLIT_SCREEN_SHADER_HANDLE: Handle<Shader> =
+    uuid_handle!("1a2b3c4d-5e6f-7890-abcd-ef1234567890");
 
 // ============================================================================
 // RECURSO PARA MOVIMIENTOS ACTIVOS
@@ -319,6 +331,7 @@ fn main() {
         }))
         .add_plugins(EguiPlugin::default())
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
+        .add_plugins(Material2dPlugin::<SplitScreenMaterial>::default())
         // Estado de la aplicación
         .init_state::<AppState>()
         // Configuración de conexión (valores iniciales desde args y config)
@@ -348,6 +361,9 @@ fn main() {
         .insert_resource(LocalPlayersUIState::default())
         // Player colors for split-screen
         .insert_resource(PlayerColors::default())
+        // Dynamic split-screen resources
+        .insert_resource(DynamicSplitState::default())
+        .insert_resource(SplitScreenTextures::default())
         // Cargar assets embebidos al inicio (antes de todo)
         .add_systems(Startup, load_embedded_assets)
         // Sistemas de input y detección
@@ -434,9 +450,11 @@ fn main() {
                 adjust_field_for_map,
                 interpolate_entities,
                 keep_name_horizontal,
+                update_split_screen_state,
                 camera_follow_player_and_ball,
                 camera_zoom_control,
                 update_camera_viewports,
+                update_split_compositor,
                 update_charge_bar,
                 update_player_sprite,
                 process_movements,
@@ -564,12 +582,80 @@ struct PlayerDetailCamera {
     local_index: u8,
 }
 
-#[derive(Component)]
-struct SplitScreenDivider;
-
 /// Cámara dedicada para UI que no tiene viewport (renderiza pantalla completa)
 #[derive(Component)]
 struct GameUiCamera;
+
+/// Cámara que compone el split-screen final
+#[derive(Component)]
+struct CompositorCamera;
+
+// ============================================================================
+// DYNAMIC SPLIT-SCREEN SYSTEM
+// ============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SplitMode {
+    #[default]
+    Unified, // Una sola cámara siguiendo a ambos jugadores
+    Transitioning, // Animando entre modos
+    Split,         // Dos cámaras independientes
+}
+
+#[derive(Resource)]
+struct DynamicSplitState {
+    mode: SplitMode,
+    split_factor: f32,    // 0.0 = unified, 1.0 = full split
+    split_angle: f32,     // Ángulo de la línea divisoria en radianes
+    merge_threshold: f32, // Distancia para fusionar (con histéresis)
+    split_threshold: f32, // Distancia para separar
+    /// Ratio del viewport visible (basado en zoom) usado para calcular umbrales
+    viewport_visible_ratio: f32,
+}
+
+impl Default for DynamicSplitState {
+    fn default() -> Self {
+        Self {
+            mode: SplitMode::Unified,
+            split_factor: 0.0,
+            split_angle: FRAC_PI_2, // Vertical por defecto
+            merge_threshold: 600.0, // Distancia a la que se fusionan
+            split_threshold: 800.0, // Distancia a la que se separan
+            viewport_visible_ratio: 1.0,
+        }
+    }
+}
+
+/// Handles para las texturas de render target de cada cámara
+#[derive(Resource, Default)]
+struct SplitScreenTextures {
+    camera1_texture: Option<Handle<Image>>,
+    camera2_texture: Option<Handle<Image>>,
+}
+
+/// Material para el compositor de split-screen
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+struct SplitScreenMaterial {
+    #[texture(0)]
+    #[sampler(1)]
+    camera1_texture: Handle<Image>,
+    #[texture(2)]
+    #[sampler(3)]
+    camera2_texture: Handle<Image>,
+    /// x: angle, y: factor, z: center_x, w: center_y
+    #[uniform(4)]
+    split_params: Vec4,
+}
+
+impl Material2d for SplitScreenMaterial {
+    fn fragment_shader() -> ShaderRef {
+        SPLIT_SCREEN_SHADER_HANDLE.into()
+    }
+}
+
+/// Componente para identificar el mesh que muestra el split-screen compuesto
+#[derive(Component)]
+struct SplitScreenQuad;
 
 // ============================================================================
 // COMPONENTES
@@ -678,7 +764,11 @@ fn cleanup_menu_camera(mut commands: Commands, menu_camera: Query<Entity, With<M
 }
 
 /// Carga los assets embebidos en memoria al iniciar la aplicación
-fn load_embedded_assets(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+fn load_embedded_assets(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut shaders: ResMut<Assets<Shader>>,
+) {
     let ball_image = Image::from_buffer(
         BALL_PNG,
         ImageType::Extension("png"),
@@ -690,6 +780,12 @@ fn load_embedded_assets(mut commands: Commands, mut images: ResMut<Assets<Image>
     .expect("Failed to load embedded ball.png");
 
     let ball_handle = images.add(ball_image);
+
+    // Cargar el shader de split-screen embebido
+    shaders.insert(
+        &SPLIT_SCREEN_SHADER_HANDLE,
+        Shader::from_wgsl(SPLIT_SCREEN_SHADER_SRC, file!()),
+    );
 
     commands.insert_resource(EmbeddedAssets {
         ball_texture: ball_handle,
@@ -2225,56 +2321,151 @@ fn setup(
     mut commands: Commands,
     config: Res<GameConfig>,
     mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut split_materials: ResMut<Assets<SplitScreenMaterial>>,
+    mut split_textures: ResMut<SplitScreenTextures>,
     local_players: Res<LocalPlayers>,
     windows: Query<&Window>,
 ) {
     // Obtener tamaño de ventana para calcular viewports
     let window = windows.iter().next();
+    // Tamaño físico (para texturas de render target)
     let window_size = window
         .map(|w| UVec2::new(w.physical_width(), w.physical_height()))
         .unwrap_or(UVec2::new(1280, 720));
+    // Tamaño lógico (para el quad del compositor, porque ScalingMode::WindowSize usa unidades lógicas)
+    let window_logical_size = window
+        .map(|w| Vec2::new(w.width(), w.height()))
+        .unwrap_or(Vec2::new(1280.0, 720.0));
 
     // Número de jugadores locales (mínimo 1)
     let num_local_players = local_players.players.len().max(1);
+    let use_dynamic_split = num_local_players >= 2;
 
-    // Crear cámaras para cada jugador local con viewports divididos verticalmente
-    for i in 0..num_local_players {
-        let viewport = if num_local_players == 1 {
-            // Un solo jugador: pantalla completa (sin viewport)
-            None
-        } else {
-            // Múltiples jugadores: dividir pantalla verticalmente
-            let viewport_width = window_size.x / num_local_players as u32;
-            Some(Viewport {
-                physical_position: UVec2::new(viewport_width * i as u32, 0),
-                physical_size: UVec2::new(viewport_width, window_size.y),
-                ..default()
-            })
-        };
+    // Para split-screen dinámico: crear texturas de render target para cada cámara
+    let mut player_camera_textures: Vec<Handle<Image>> = Vec::new();
 
+    if use_dynamic_split {
+        for i in 0..2 {
+            let mut cam_image = Image::new_uninit(
+                bevy::render::render_resource::Extent3d {
+                    width: window_size.x,
+                    height: window_size.y,
+                    depth_or_array_layers: 1,
+                },
+                TextureDimension::D2,
+                TextureFormat::Bgra8UnormSrgb,
+                RenderAssetUsages::all(),
+            );
+            cam_image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_DST
+                | TextureUsages::RENDER_ATTACHMENT;
+            let cam_image_handle = images.add(cam_image);
+            player_camera_textures.push(cam_image_handle);
+        }
+
+        // Guardar referencias a las texturas
+        split_textures.camera1_texture = player_camera_textures.first().cloned();
+        split_textures.camera2_texture = player_camera_textures.get(1).cloned();
+    }
+
+    // Crear cámaras para cada jugador local
+    let mut player_cameras: Vec<Entity> = Vec::new();
+    for i in 0..num_local_players.min(2) {
         let server_player_id = local_players
             .players
             .get(i)
             .and_then(|lp| lp.server_player_id);
 
-        commands.spawn((
-            Camera2d,
-            Camera {
-                order: i as isize, // Orden de renderizado
-                viewport: viewport.clone(),
-                ..default()
-            },
-            Projection::Orthographic(OrthographicProjection {
-                scale: 3.0,
-                ..OrthographicProjection::default_2d()
-            }),
-            Transform::from_xyz(0.0, 0.0, 999.0),
-            PlayerCamera {
-                local_index: i as u8,
-                server_player_id,
-            },
-            RenderLayers::layer(0),
-        ));
+        if use_dynamic_split {
+            // Renderizar a textura para composición dinámica
+            let target_texture = player_camera_textures.get(i).cloned();
+            if let Some(texture) = target_texture {
+                let cam = commands
+                    .spawn((
+                        Camera2d,
+                        Camera {
+                            order: -(10 + i as isize), // Renderizar antes del compositor
+                            target: RenderTarget::Image(texture.into()),
+                            clear_color: ClearColorConfig::Custom(Color::srgb(0.1, 0.1, 0.15)),
+                            ..default()
+                        },
+                        Projection::Orthographic(OrthographicProjection {
+                            scale: 3.0,
+                            ..OrthographicProjection::default_2d()
+                        }),
+                        Transform::from_xyz(0.0, 0.0, 999.0),
+                        PlayerCamera {
+                            local_index: i as u8,
+                            server_player_id,
+                        },
+                        RenderLayers::layer(0),
+                    ))
+                    .id();
+                player_cameras.push(cam);
+            }
+        } else {
+            // Un solo jugador: renderizar directamente a pantalla
+            commands.spawn((
+                Camera2d,
+                Camera {
+                    order: i as isize,
+                    ..default()
+                },
+                Projection::Orthographic(OrthographicProjection {
+                    scale: 3.0,
+                    ..OrthographicProjection::default_2d()
+                }),
+                Transform::from_xyz(0.0, 0.0, 999.0),
+                PlayerCamera {
+                    local_index: i as u8,
+                    server_player_id,
+                },
+                RenderLayers::layer(0),
+            ));
+        }
+    }
+
+    // Crear compositor de split-screen si hay 2+ jugadores
+    if use_dynamic_split {
+        if let (Some(tex1), Some(tex2)) = (
+            player_camera_textures.first().cloned(),
+            player_camera_textures.get(1).cloned(),
+        ) {
+            // Crear el material de composición
+            let split_material = split_materials.add(SplitScreenMaterial {
+                camera1_texture: tex1,
+                camera2_texture: tex2,
+                split_params: Vec4::new(FRAC_PI_2, 0.0, 0.5, 0.5), // angle, factor, center_x, center_y
+            });
+
+            // Crear cámara compositor con proyección fija al tamaño de ventana
+            commands.spawn((
+                Camera2d,
+                Camera {
+                    order: 0, // Después de las cámaras de jugador, antes de UI
+                    ..default()
+                },
+                Projection::Orthographic(OrthographicProjection {
+                    scaling_mode: ScalingMode::Fixed {
+                        width: window_logical_size.x / 2.0,
+                        height: window_logical_size.y / 2.0,
+                    },
+                    ..OrthographicProjection::default_2d()
+                }),
+                CompositorCamera,
+                RenderLayers::layer(3), // Layer especial para compositor
+            ));
+
+            // Quad fullscreen que muestra la composición
+            commands.spawn((
+                Mesh2d(meshes.add(Rectangle::new(window_logical_size.x, window_logical_size.y))),
+                MeshMaterial2d(split_material),
+                Transform::from_xyz(0.0, 0.0, 0.0),
+                SplitScreenQuad,
+                RenderLayers::layer(3),
+            ));
+        }
     }
 
     // --- Crear texturas de render target para ViewportNodes ---
@@ -2334,8 +2525,9 @@ fn setup(
             TextureFormat::Bgra8UnormSrgb,
             RenderAssetUsages::all(),
         );
-        detail_image.texture_descriptor.usage =
-            TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
+        detail_image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_DST
+            | TextureUsages::RENDER_ATTACHMENT;
         let detail_image_handle = images.add(detail_image);
 
         let detail_camera = commands
@@ -2352,7 +2544,9 @@ fn setup(
                     ..OrthographicProjection::default_2d()
                 }),
                 Transform::from_xyz(0.0, 0.0, 999.0),
-                PlayerDetailCamera { local_index: i as u8 },
+                PlayerDetailCamera {
+                    local_index: i as u8,
+                },
                 RenderLayers::layer(2),
             ))
             .id();
@@ -2374,24 +2568,7 @@ fn setup(
         ))
         .id();
 
-    // --- Línea divisoria para split-screen (solo si hay 2+ jugadores) ---
-    if num_local_players >= 2 {
-        commands.spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(50.0),
-                top: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                width: Val::Px(4.0),
-                margin: UiRect::left(Val::Px(-2.0)), // Centrar la línea
-                ..default()
-            },
-            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
-            SplitScreenDivider,
-            UiTargetCamera(ui_camera),
-            Pickable::IGNORE,
-        ));
-    }
+    // La línea divisoria se dibuja directamente en el shader del compositor
 
     // --- UI con ViewportNodes ---
     // Contenedor raíz para posicionar los viewports
@@ -2975,15 +3152,16 @@ fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQueri
                     get_team_colors(ps.team_index, &config.team_colors);
 
                 // Generar color único para el jugador (para nombre y minimapa)
-                let unique_player_color = player_colors
-                    .colors
-                    .get(&ps.id)
-                    .copied()
-                    .unwrap_or_else(|| {
-                        let color = generate_unique_player_color(player_colors);
-                        player_colors.colors.insert(ps.id, color);
-                        color
-                    });
+                let unique_player_color =
+                    player_colors
+                        .colors
+                        .get(&ps.id)
+                        .copied()
+                        .unwrap_or_else(|| {
+                            let color = generate_unique_player_color(player_colors);
+                            player_colors.colors.insert(ps.id, color);
+                            color
+                        });
 
                 // Usar textura con children
                 commands
@@ -3278,7 +3456,8 @@ fn interpolate_entities(time: Res<Time>, mut q: Query<(&mut Transform, &Interpol
 fn camera_follow_player_and_ball(
     my_player_id: Res<MyPlayerId>,
     local_players: Res<LocalPlayers>,
-    ball_query: Query<
+    split_state: Res<DynamicSplitState>,
+    _ball_query: Query<
         &Transform,
         (
             With<RemoteBall>,
@@ -3310,15 +3489,35 @@ fn camera_follow_player_and_ball(
     let delta = time.delta_secs();
     let smoothing = 10.0;
 
-    // Obtener posición de la pelota (común para todas las cámaras)
-    let ball_pos = ball_query
-        .iter()
-        .next()
-        .map(|t| t.translation);
-
-    // Calcular cuántos jugadores locales hay para ajustar límites horizontales
+    // Calcular cuántos jugadores locales hay
     let num_local_players = local_players.players.len().max(1);
-    let is_split_screen = num_local_players > 1;
+    let _use_split = num_local_players > 1;
+
+    // Recopilar posiciones de todos los jugadores locales para calcular centroide
+    let mut local_player_positions: Vec<Vec3> = Vec::new();
+    for local_player in local_players.players.iter().take(2) {
+        if let Some(server_id) = local_player.server_player_id {
+            if let Some((_, transform)) = players.iter().find(|(p, _)| p.id == server_id) {
+                local_player_positions.push(transform.translation);
+            }
+        }
+    }
+
+    // Calcular centroide de todos los jugadores locales
+    let centroid = if local_player_positions.is_empty() {
+        None
+    } else {
+        let sum: Vec3 = local_player_positions.iter().copied().sum();
+        Some(sum / local_player_positions.len() as f32)
+    };
+
+    // Factor de split: 0 = unified (seguir centroide), 1 = split (cada cámara sigue su jugador)
+    let split_factor = split_state.split_factor;
+    let split_angle = split_state.split_angle;
+
+    // Calcular el vector normal del split (dirección entre jugadores)
+    // Este es el eje perpendicular a la línea de división
+    let split_normal = Vec2::new(split_angle.cos(), split_angle.sin());
 
     // Iterar sobre todas las cámaras de jugador
     for (mut cam_transform, player_camera) in cameras.p0().iter_mut() {
@@ -3336,42 +3535,54 @@ fn camera_follow_player_and_ball(
             .map(|(_, t)| t.translation);
 
         if let Some(p_pos) = player_pos {
-            let ball_position = ball_pos.unwrap_or(p_pos);
+            // Centroide de los jugadores
+            let unified_target = centroid.unwrap_or(p_pos);
 
-            // 1. Objetivo base
-            let target_pos = p_pos.lerp(ball_position, 0.65);
+            // Cuando split_factor > 0, calcular el centro de la región de esta cámara
+            //
+            // La pantalla se divide con una línea. Cada mitad es un cuadrilátero.
+            // El centro del cuadrilátero es la intersección de sus diagonales.
+            //
+            // Para simplificar: el centro de cada mitad está aproximadamente a 1/4
+            // del viewport desde el centro, EN LA DIRECCIÓN del jugador respecto al centro.
+            //
+            // En vez de usar el split_normal (que apunta entre jugadores),
+            // calculamos el offset basado en la posición del jugador respecto al centroide.
 
-            // 2. Límites de cámara (ajustados para split-screen)
-            // En split-screen, los límites horizontales son menores
-            let limit_up = 120.0;
-            let limit_down = 400.0;
+            let split_target = if let Some(cent) = centroid {
+                // Vector desde este jugador hacia el centroide (hacia el OTRO jugador)
+                let to_center = cent - p_pos;
+                let distance_to_center = to_center.truncate().length();
 
-            // Reducir límites horizontales en split-screen porque la vista es más angosta
-            let (limit_left, limit_right) = if is_split_screen {
-                (225.0, 100.0) // Mitad de los valores normales
+                if distance_to_center > 1.0 {
+                    // Para que el jugador aparezca en el centro de SU mitad de pantalla:
+                    // - El centro de su mitad está DESPLAZADO del centro de pantalla
+                    // - El desplazamiento es HACIA su lado (alejándose del otro jugador)
+                    // - Para lograr esto, la cámara debe moverse HACIA el otro jugador
+                    //
+                    // Magnitud: ~1/4 del viewport visible
+                    let visible_quarter = 240.0 * 3.0; // ~720 unidades a scale 3.0
+
+                    // Dirección: hacia el centroide (hacia el otro jugador)
+                    let dir = to_center.truncate().normalize();
+
+                    // Mover cámara HACIA el otro jugador
+                    // Esto hace que el jugador aparezca desplazado hacia SU lado de la pantalla
+                    let camera_offset =
+                        Vec3::new(dir.x * visible_quarter, dir.y * visible_quarter, 0.0);
+
+                    p_pos + camera_offset
+                } else {
+                    p_pos
+                }
             } else {
-                (450.0, 200.0)
+                p_pos
             };
 
-            // 3. Clamping asimétrico
-            let mut final_target = target_pos;
-            let diff = target_pos - p_pos;
+            // Interpolar entre unified (centroide) y split (jugador en centro de su región)
+            let final_target = unified_target.lerp(split_target, split_factor);
 
-            // Eje X
-            if diff.x > limit_right {
-                final_target.x = p_pos.x + limit_right;
-            } else if diff.x < -limit_left {
-                final_target.x = p_pos.x - limit_left;
-            }
-
-            // Eje Y
-            if diff.y > limit_up {
-                final_target.y = p_pos.y + limit_up;
-            } else if diff.y < -limit_down {
-                final_target.y = p_pos.y - limit_down;
-            }
-
-            // 4. Aplicar movimiento suavizado
+            // Aplicar movimiento suavizado
             cam_transform.translation.x +=
                 (final_target.x - cam_transform.translation.x) * smoothing * delta;
             cam_transform.translation.y +=
@@ -3447,52 +3658,163 @@ fn camera_zoom_control(
     }
 }
 
-/// Sistema que actualiza los viewports de las cámaras cuando cambia el número de jugadores locales
-/// o el tamaño de la ventana, y sincroniza los server_player_id
+/// Sistema que sincroniza los server_player_id de las cámaras con LocalPlayers
+/// (Ya no maneja viewports porque usamos render-to-texture para split dinámico)
 fn update_camera_viewports(
     local_players: Res<LocalPlayers>,
-    windows: Query<&Window>,
-    mut cameras: Query<(&mut Camera, &mut PlayerCamera)>,
+    mut cameras: Query<&mut PlayerCamera>,
 ) {
-    // Solo procesar si hay cambios (el sistema se ejecuta cada frame, pero es ligero)
-    let Some(window) = windows.iter().next() else {
-        return;
-    };
-
-    let window_size = UVec2::new(window.physical_width(), window.physical_height());
-    if window_size.x == 0 || window_size.y == 0 {
-        return;
-    }
-
-    let num_local_players = local_players.players.len().max(1);
-
-    for (mut camera, mut player_cam) in cameras.iter_mut() {
+    for mut player_cam in cameras.iter_mut() {
         // Sincronizar server_player_id desde LocalPlayers
         if let Some(local_player) = local_players.players.get(player_cam.local_index as usize) {
             player_cam.server_player_id = local_player.server_player_id;
         }
+    }
+}
 
-        let viewport = if num_local_players == 1 {
-            // Un solo jugador: sin viewport (pantalla completa)
-            None
-        } else {
-            // Múltiples jugadores: dividir pantalla verticalmente
-            let viewport_width = window_size.x / num_local_players as u32;
-            let index = player_cam.local_index as u32;
+/// Calcula el ángulo del vector entre jugadores.
+/// El shader usa este ángulo como normal - la línea de corte será perpendicular.
+/// Nota: Las coordenadas UV tienen Y invertido, por eso negamos direction.y
+fn calculate_split_angle(player1_pos: Vec2, player2_pos: Vec2) -> f32 {
+    let direction = player2_pos - player1_pos;
+    // El ángulo es la dirección entre jugadores (el shader dibuja la línea perpendicular)
+    // Negamos Y porque las UV tienen Y invertido respecto al mundo
+    (-direction.y).atan2(direction.x)
+}
 
-            // Solo crear viewport si el índice es válido
-            if index < num_local_players as u32 {
-                Some(Viewport {
-                    physical_position: UVec2::new(viewport_width * index, 0),
-                    physical_size: UVec2::new(viewport_width, window_size.y),
-                    ..default()
-                })
+/// Sistema que actualiza el estado del split-screen dinámico
+fn update_split_screen_state(
+    local_players: Res<LocalPlayers>,
+    players: Query<(&RemotePlayer, &Transform)>,
+    cameras: Query<&Projection, With<PlayerCamera>>,
+    mut split_state: ResMut<DynamicSplitState>,
+    time: Res<Time>,
+) {
+    // Solo procesar si hay 2+ jugadores locales
+    if local_players.players.len() < 2 {
+        split_state.mode = SplitMode::Unified;
+        split_state.split_factor = 0.0;
+        return;
+    }
+
+    // Obtener posiciones de los jugadores locales
+    let mut local_positions: Vec<Vec2> = Vec::new();
+
+    for local_player in local_players.players.iter().take(2) {
+        if let Some(server_id) = local_player.server_player_id {
+            if let Some((_, transform)) = players.iter().find(|(p, _)| p.id == server_id) {
+                local_positions.push(transform.translation.truncate());
+            }
+        }
+    }
+
+    // Necesitamos al menos 2 posiciones
+    if local_positions.len() < 2 {
+        return;
+    }
+
+    let pos1 = local_positions[0];
+    let pos2 = local_positions[1];
+
+    // Calcular distancia entre jugadores
+    let distance = pos1.distance(pos2);
+
+    // Obtener escala de zoom para ajustar umbrales
+    let zoom_scale = cameras
+        .iter()
+        .next()
+        .and_then(|p| {
+            if let Projection::Orthographic(ortho) = p {
+                Some(ortho.scale)
             } else {
                 None
             }
-        };
+        })
+        .unwrap_or(3.0);
 
-        camera.viewport = viewport;
+    // Calcular umbral visible basado en zoom (aproximación del viewport visible)
+    // A mayor zoom (scale), menos se ve, así que los umbrales deben ser menores
+    let base_visible = 600.0; // Distancia base visible a zoom 1.0
+    let visible_distance = base_visible * zoom_scale;
+
+    // Umbrales con histéresis para evitar parpadeo
+    let split_threshold = visible_distance * 0.8; // 80% del visible para separar
+    let merge_threshold = visible_distance * 0.5; // 50% del visible para fusionar
+
+    split_state.split_threshold = split_threshold;
+    split_state.merge_threshold = merge_threshold;
+    split_state.viewport_visible_ratio = zoom_scale;
+
+    // Determinar modo objetivo
+    let target_mode = match split_state.mode {
+        SplitMode::Unified => {
+            if distance > split_threshold {
+                SplitMode::Split
+            } else {
+                SplitMode::Unified
+            }
+        }
+        SplitMode::Split => {
+            if distance < merge_threshold {
+                SplitMode::Unified
+            } else {
+                SplitMode::Split
+            }
+        }
+        SplitMode::Transitioning => {
+            // Durante transición, usar umbrales sin histéresis
+            if distance > (split_threshold + merge_threshold) / 2.0 {
+                SplitMode::Split
+            } else {
+                SplitMode::Unified
+            }
+        }
+    };
+
+    // Calcular factor objetivo
+    let target_factor = match target_mode {
+        SplitMode::Unified => 0.0,
+        SplitMode::Split => 1.0,
+        SplitMode::Transitioning => split_state.split_factor,
+    };
+
+    // Interpolación suave del factor
+    let transition_speed = 5.0;
+    let t = time.delta_secs() * transition_speed;
+    let new_factor = split_state.split_factor + (target_factor - split_state.split_factor) * t;
+
+    // Actualizar modo basado en el factor
+    split_state.mode = if new_factor < 0.01 {
+        SplitMode::Unified
+    } else if new_factor > 0.99 {
+        SplitMode::Split
+    } else {
+        SplitMode::Transitioning
+    };
+
+    split_state.split_factor = new_factor.clamp(0.0, 1.0);
+
+    // Calcular ángulo de división
+    split_state.split_angle = calculate_split_angle(pos1, pos2);
+}
+
+/// Sistema que actualiza el material del compositor con los parámetros actuales
+fn update_split_compositor(
+    split_state: Res<DynamicSplitState>,
+    split_quad: Query<&MeshMaterial2d<SplitScreenMaterial>, With<SplitScreenQuad>>,
+    mut split_materials: ResMut<Assets<SplitScreenMaterial>>,
+) {
+    for material_handle in split_quad.iter() {
+        if let Some(material) = split_materials.get_mut(material_handle) {
+            // Actualizar los parámetros del shader
+            // x: angle, y: factor, z: center_x, w: center_y
+            material.split_params = Vec4::new(
+                split_state.split_angle,
+                split_state.split_factor,
+                0.5, // Centro X (normalizado 0-1)
+                0.5, // Centro Y (normalizado 0-1)
+            );
+        }
     }
 }
 
@@ -4135,8 +4457,10 @@ fn spawn_minimap_dots(
         existing_dots.iter().map(|dot| dot.tracks_entity).collect();
 
     // Crear set de entidades ya trackeadas por nombres
-    let tracked_names: std::collections::HashSet<Entity> =
-        existing_names.iter().map(|name| name.tracks_entity).collect();
+    let tracked_names: std::collections::HashSet<Entity> = existing_names
+        .iter()
+        .map(|name| name.tracks_entity)
+        .collect();
 
     // Spawn dots y nombres para jugadores que aún no tienen
     for (entity, player) in players_with_dots.iter() {
@@ -4252,7 +4576,8 @@ fn sync_minimap_names(
     for (name, mut name_transform) in names.iter_mut() {
         if let Ok(tracked_transform) = transforms.get(name.tracks_entity) {
             name_transform.translation.x = tracked_transform.translation.x;
-            name_transform.translation.y = tracked_transform.translation.y + 150.0; // Encima del dot
+            name_transform.translation.y = tracked_transform.translation.y + 150.0;
+            // Encima del dot
         }
     }
 }
