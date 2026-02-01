@@ -22,6 +22,8 @@ mod keybindings;
 mod local_players;
 mod host;
 mod shared;
+mod events;
+mod spawning;
 
 // ============================================================================
 // RE-EXPORTS
@@ -59,6 +61,8 @@ use local_players::{
     detect_gamepads, AvailableInputDevices, LocalPlayers, LocalPlayersUIState,
 };
 use shared::protocol::GameConfig;
+use events::{SpawnBallEvent, SpawnPlayerEvent};
+use spawning::{handle_spawn_ball, handle_spawn_player};
 
 // ============================================================================
 // CLI ARGUMENTS
@@ -150,6 +154,9 @@ fn main() {
         // Dynamic split-screen resources
         .insert_resource(DynamicSplitState::default())
         .insert_resource(SplitScreenTextures::default())
+        // Eventos de spawning
+        .add_event::<SpawnBallEvent>()
+        .add_event::<SpawnPlayerEvent>()
         // Cargar assets embebidos al inicio (antes de todo)
         .add_systems(Startup, load_embedded_assets)
         // Sistemas de input y detección
@@ -227,6 +234,12 @@ fn main() {
         .add_systems(
             FixedUpdate,
             (handle_multi_player_input, process_network_messages)
+                .run_if(in_state(AppState::InGame)),
+        )
+        // Sistemas de spawning (procesan eventos emitidos por network)
+        .add_systems(
+            Update,
+            (handle_spawn_ball, handle_spawn_player)
                 .run_if(in_state(AppState::InGame)),
         )
         // Lógica visual y renderizado (solo en InGame)
