@@ -1,68 +1,69 @@
 use bevy::prelude::*;
+use bevy::sprite_render::Material2dPlugin;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 use bevy_rapier2d::prelude::*;
-use bevy::sprite_render::Material2dPlugin;
 use clap::Parser;
 
 // ============================================================================
 // MODULES
 // ============================================================================
 
-mod states;
-mod color_utils;
 mod assets;
-mod components;
-mod resources;
-mod ui;
-mod networking;
 mod camera;
-mod rendering;
+mod color_utils;
+mod components;
+mod events;
 mod game;
+mod host;
 mod keybindings;
 mod local_players;
-mod host;
+mod networking;
+mod rendering;
+mod resources;
 mod shared;
-mod events;
 mod spawning;
+mod states;
+mod ui;
 
 // ============================================================================
 // RE-EXPORTS
 // ============================================================================
 
-use states::AppState;
 use assets::{load_embedded_assets, EmbeddedAssets};
-use resources::{
-    ConnectionConfig, CreateRoomConfig, DynamicSplitState, GameTick, LoadedMap, MyPlayerId,
-    NetworkChannels, PlayerColors, PreviousInput, RoomFetchChannel, RoomList, SelectedRoom,
-    SplitScreenMaterial, SplitScreenTextures,
-};
-use ui::{
-    cleanup_menu_camera, create_room_ui, fetch_rooms, check_rooms_fetch, gamepad_config_ui,
-    hosting_ui, local_players_setup_ui, menu_ui, room_selection_ui, settings_ui,
-    setup_menu_camera_if_needed, start_hosting,
-};
-use networking::{check_connection, process_network_messages, start_connection};
 use camera::{
     camera_follow_player_and_ball, camera_zoom_control, update_camera_viewports,
     update_split_compositor, update_split_screen_state,
 };
-use rendering::{
-    adjust_field_for_map, cleanup_minimap_dots, keep_name_horizontal, spawn_minimap_dots,
-    sync_minimap_dots, sync_minimap_names, update_charge_bar, update_dash_cooldown,
-    update_mode_visuals, update_player_sprite,
+use events::{SpawnBallEvent, SpawnPlayerEvent};
+use game::{
+    animate_keys, cleanup_game, handle_multi_player_input, interpolate_entities, process_movements,
+    setup,
 };
-use game::{animate_keys, handle_multi_player_input, interpolate_entities, process_movements, setup};
 use keybindings::{
     load_app_config, load_gamepad_bindings_map, load_keybindings, DetectedGamepadEvent,
     GamepadBindingsMap, GamepadConfigUIState, GilrsWrapper, KeyBindingsConfig, RawGamepadInput,
     SettingsUIState,
 };
-use local_players::{
-    detect_gamepads, AvailableInputDevices, LocalPlayers, LocalPlayersUIState,
+use local_players::{detect_gamepads, AvailableInputDevices, LocalPlayers, LocalPlayersUIState};
+use networking::{check_connection, process_network_messages, start_connection};
+use rendering::{
+    adjust_field_for_map, cleanup_minimap_dots, keep_name_horizontal, spawn_minimap_dots,
+    sync_minimap_dots, sync_minimap_names, update_charge_bar, update_dash_cooldown,
+    update_mode_visuals, update_player_sprite,
+};
+use resources::{
+    AdminPanelState, ConnectionConfig, CreateRoomConfig, DynamicSplitState, GameTick, LoadedMap,
+    MyPlayerId, NetworkChannels, PlayerColors, PreviousInput, RoomFetchChannel, RoomList,
+    SelectedRoom, SplitScreenMaterial, SplitScreenTextures,
 };
 use shared::protocol::GameConfig;
-use events::{SpawnBallEvent, SpawnPlayerEvent};
 use spawning::{handle_spawn_ball, handle_spawn_player};
+use states::AppState;
+use ui::{
+    admin_panel_ui, check_rooms_fetch, cleanup_menu_camera, create_room_ui, fetch_rooms,
+    gamepad_config_ui, hosting_ui, local_players_setup_ui, menu_ui, room_selection_ui, settings_ui,
+    setup_menu_camera_if_needed, start_hosting, toggle_admin_panel,
+};
 
 // ============================================================================
 // CLI ARGUMENTS
@@ -154,6 +155,8 @@ fn main() {
         // Dynamic split-screen resources
         .insert_resource(DynamicSplitState::default())
         .insert_resource(SplitScreenTextures::default())
+        // Admin panel state
+        .insert_resource(AdminPanelState::default())
         // Eventos de spawning
         .add_event::<SpawnBallEvent>()
         .add_event::<SpawnPlayerEvent>()
@@ -230,6 +233,8 @@ fn main() {
         )
         // Setup del juego (solo al entrar a InGame)
         .add_systems(OnEnter(AppState::InGame), setup)
+        // Cleanup al salir de InGame
+        .add_systems(OnExit(AppState::InGame), cleanup_game)
         // Lógica de red y entrada (frecuencia fija, solo en InGame)
         .add_systems(
             FixedUpdate,
@@ -239,8 +244,7 @@ fn main() {
         // Sistemas de spawning (procesan eventos emitidos por network)
         .add_systems(
             Update,
-            (handle_spawn_ball, handle_spawn_player)
-                .run_if(in_state(AppState::InGame)),
+            (handle_spawn_ball, handle_spawn_player).run_if(in_state(AppState::InGame)),
         )
         // Lógica visual y renderizado (solo en InGame)
         .add_systems(
@@ -267,6 +271,12 @@ fn main() {
             )
                 .run_if(in_state(AppState::InGame)),
         )
+        // Panel de administración - sin run_if para debug
+        .add_systems(
+            Update,
+            toggle_admin_panel.run_if(in_state(AppState::InGame)),
+        )
+        .add_systems(EguiPrimaryContextPass, admin_panel_ui)
         .run();
 
     println!("✅ [Bevy] App::run() ha finalizado normalmente");

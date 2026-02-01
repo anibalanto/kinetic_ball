@@ -2,7 +2,9 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::sprite_render::ColorMaterial;
 
-use crate::components::{MinimapDot, MinimapFieldLine, MinimapPlayerName, RemoteBall, RemotePlayer};
+use crate::components::{
+    InGameEntity, MinimapDot, MinimapFieldLine, MinimapPlayerName, RemoteBall, RemotePlayer,
+};
 use crate::rendering::field::approximate_curve_for_rendering;
 use crate::resources::PlayerColors;
 use crate::shared::map::Map;
@@ -75,6 +77,7 @@ pub fn spawn_minimap_line_segment(
     let angle = delta.y.atan2(delta.x);
 
     commands.spawn((
+        InGameEntity,
         Sprite {
             color,
             custom_size: Some(Vec2::new(length, thickness)),
@@ -124,6 +127,7 @@ pub fn spawn_minimap_dots(
 
             // Círculo de 120px para jugadores
             commands.spawn((
+                InGameEntity,
                 Mesh2d(meshes.add(Circle::new(120.0))),
                 MeshMaterial2d(materials.add(dot_color)),
                 Transform::from_xyz(0.0, 0.0, 10.0),
@@ -145,6 +149,7 @@ pub fn spawn_minimap_dots(
 
             // Crear un nodo de texto para el nombre del jugador
             commands.spawn((
+                InGameEntity,
                 Text2d::new(player.name.clone()),
                 TextFont {
                     font_size: 80.0,
@@ -168,6 +173,7 @@ pub fn spawn_minimap_dots(
 
         // Círculo de 80px blanco para pelota
         commands.spawn((
+            InGameEntity,
             Mesh2d(meshes.add(Circle::new(80.0))),
             MeshMaterial2d(materials.add(Color::WHITE)),
             Transform::from_xyz(0.0, 0.0, 11.0),

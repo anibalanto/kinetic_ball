@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use bevy::sprite_render::ColorMaterial;
 
 use crate::components::{
-    DefaultFieldLine, FieldBackground, MapLineEntity, MinimapCamera, MinimapFieldBackground,
-    MinimapFieldLine,
+    DefaultFieldLine, FieldBackground, InGameEntity, MapLineEntity, MinimapCamera,
+    MinimapFieldBackground, MinimapFieldLine,
 };
 use crate::rendering::minimap::spawn_minimap_lines;
 use crate::resources::LoadedMap;
@@ -199,6 +199,7 @@ pub fn spawn_line_segment(commands: &mut Commands, p0: Vec2, p1: Vec2, color: Co
     let angle = delta.y.atan2(delta.x);
 
     commands.spawn((
+        InGameEntity,
         Sprite {
             color,
             custom_size: Some(Vec2::new(length, LINE_THICKNESS)),
@@ -221,6 +222,7 @@ pub fn spawn_circle(
     color: Color,
 ) {
     commands.spawn((
+        InGameEntity,
         Mesh2d(meshes.add(Circle::new(radius))),
         MeshMaterial2d(materials.add(color)),
         Transform::from_xyz(pos.x, pos.y, MAP_LINES_Z),
@@ -243,6 +245,7 @@ pub fn spawn_circle_outline(
 
     // Círculo exterior (borde)
     commands.spawn((
+        InGameEntity,
         Mesh2d(meshes.add(Circle::new(radius))),
         MeshMaterial2d(materials.add(color)),
         Transform::from_xyz(pos.x, pos.y, MAP_LINES_Z),
@@ -252,6 +255,7 @@ pub fn spawn_circle_outline(
 
     // Círculo interior (transparente/color del fondo) - simula outline
     commands.spawn((
+        InGameEntity,
         Mesh2d(meshes.add(Circle::new(radius - outline_thickness))),
         MeshMaterial2d(materials.add(Color::srgba(0.0, 0.0, 0.0, 0.0))), // Transparente
         Transform::from_xyz(pos.x, pos.y, MAP_LINES_Z + 0.1),            // Ligeramente por encima

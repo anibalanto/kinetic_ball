@@ -319,6 +319,10 @@ pub enum NetworkEvent {
     PlayerReady {
         peer_id: PeerId, // Buscar por peer_id en lugar de por id
     },
+    /// El jugador solicitó salir voluntariamente
+    PlayerLeave {
+        player_id: u32,
+    },
 }
 
 /// Mensajes salientes del servidor a los clientes

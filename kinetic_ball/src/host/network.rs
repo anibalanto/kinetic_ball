@@ -194,6 +194,11 @@ pub fn handle_control_message_typed(
             let _ = event_tx.send(NetworkEvent::PlayerReady { peer_id });
             None
         }
+        ControlMessage::Leave { player_id } => {
+            println!("👋 Player {} requested to leave", player_id);
+            let _ = event_tx.send(NetworkEvent::PlayerLeave { player_id });
+            None
+        }
         _ => {
             // Otros mensajes de control del servidor no deberían venir del cliente
             None
@@ -307,6 +312,32 @@ pub fn process_network_messages(
                         println!(
                             "✅ Jugador {} marcado como READY en el loop de juego",
                             player.id
+                        );
+                        break;
+                    }
+                }
+            }
+
+            NetworkEvent::PlayerLeave { player_id } => {
+                for (player, entity) in players.iter() {
+                    if player.id == player_id {
+                        // Notificar a todos los clientes que este jugador se fue
+                        let disconnect_msg = ControlMessage::PlayerDisconnected { player_id };
+                        if let Ok(data) = bincode::serialize(&disconnect_msg) {
+                            let _ = network_tx.0.send(OutgoingMessage::Broadcast {
+                                channel: 0, // Canal reliable
+                                data,
+                            });
+                        }
+
+                        // Despawnear tanto Player como Sphere
+                        commands.entity(player.sphere).despawn();
+                        commands.entity(entity).despawn();
+                        // Remover del GameInputManager
+                        game_input.remove_player(player.id);
+                        println!(
+                            "👋 Jugador {} ({}) salió voluntariamente y fue removido",
+                            player.name, player.id
                         );
                         break;
                     }

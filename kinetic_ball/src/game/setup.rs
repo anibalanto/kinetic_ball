@@ -1,16 +1,17 @@
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::{ClearColorConfig, RenderTarget, ScalingMode};
 use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{CameraOutputMode, ClearColorConfig, RenderTarget, ScalingMode};
 use bevy::prelude::*;
-use bevy::render::render_resource::{TextureDimension, TextureFormat, TextureUsages};
+use bevy::render::render_resource::{BlendState, TextureDimension, TextureFormat, TextureUsages};
 use bevy::sprite_render::ColorMaterial;
 use bevy::ui::widget::ViewportNode;
 use bevy::ui::UiTargetCamera;
+use bevy_egui::PrimaryEguiContext;
 use std::f32::consts::FRAC_PI_2;
 
 use crate::components::{
-    CompositorCamera, CurveAction, DefaultFieldLine, FieldBackground, GameUiCamera, KeyVisual,
-    MinimapCamera, PlayerCamera, PlayerDetailCamera, SplitScreenQuad,
+    CompositorCamera, CurveAction, DefaultFieldLine, FieldBackground, GameUiCamera, InGameEntity,
+    KeyVisual, MinimapCamera, PlayerCamera, PlayerDetailCamera, SplitScreenQuad,
 };
 use crate::local_players::LocalPlayers;
 use crate::resources::{DynamicSplitState, SplitScreenMaterial, SplitScreenTextures};
@@ -160,6 +161,7 @@ pub fn setup(
             if let Some(texture) = target_texture {
                 let cam = commands
                     .spawn((
+                        InGameEntity,
                         Camera2d,
                         Camera {
                             order: -(10 + i as isize), // Renderizar antes del compositor
@@ -184,6 +186,7 @@ pub fn setup(
         } else {
             // Un solo jugador: renderizar directamente a pantalla
             commands.spawn((
+                InGameEntity,
                 Camera2d,
                 Camera {
                     order: i as isize,
@@ -218,6 +221,7 @@ pub fn setup(
 
             // Crear cámara compositor con proyección fija al tamaño de ventana
             commands.spawn((
+                InGameEntity,
                 Camera2d,
                 Camera {
                     order: 0, // Después de las cámaras de jugador, antes de UI
@@ -236,6 +240,7 @@ pub fn setup(
 
             // Quad fullscreen que muestra la composición
             commands.spawn((
+                InGameEntity,
                 Mesh2d(meshes.add(Rectangle::new(window_logical_size.x, window_logical_size.y))),
                 MeshMaterial2d(split_material),
                 Transform::from_xyz(0.0, 0.0, 0.0),
@@ -268,6 +273,7 @@ pub fn setup(
     // --- Cámara minimapa - Layer 1 (renderiza a textura) ---
     let minimap_camera = commands
         .spawn((
+            InGameEntity,
             Camera2d,
             Camera {
                 order: -2, // Renderiza antes que la principal
@@ -309,6 +315,7 @@ pub fn setup(
 
         let detail_camera = commands
             .spawn((
+                InGameEntity,
                 Camera2d,
                 Camera {
                     order: -1 - i as isize, // Renderiza antes que la principal
@@ -334,12 +341,20 @@ pub fn setup(
     // --- Cámara UI dedicada (sin viewport, renderiza UI en pantalla completa) ---
     let ui_camera = commands
         .spawn((
+            InGameEntity,
             Camera2d,
             Camera {
                 order: 100, // Renderiza después de todo lo demás
+                output_mode: CameraOutputMode::Write {
+                    blend_state: Some(BlendState::ALPHA_BLENDING),
+                    clear_color: ClearColorConfig::None,
+                },
+                clear_color: ClearColorConfig::Custom(Color::NONE),
                 ..default()
             },
             GameUiCamera,
+            // Marcar como contexto primario para egui
+            PrimaryEguiContext,
             // No renderiza nada del juego, solo UI
             RenderLayers::none(),
         ))
@@ -351,6 +366,7 @@ pub fn setup(
     // Contenedor raíz para posicionar los viewports
     commands
         .spawn((
+            InGameEntity,
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
@@ -433,6 +449,7 @@ pub fn setup(
 
     // El Campo de Juego (Césped) - Color verde - Layer 0
     commands.spawn((
+        InGameEntity,
         Sprite {
             color: Color::srgb(0.2, 0.5, 0.2),
             custom_size: Some(Vec2::new(config.arena_width, config.arena_height)),
@@ -451,6 +468,7 @@ pub fn setup(
 
     // Top
     commands.spawn((
+        InGameEntity,
         Sprite {
             color: Color::WHITE,
             custom_size: Some(Vec2::new(w + thickness, thickness)),
@@ -463,6 +481,7 @@ pub fn setup(
 
     // Bottom
     commands.spawn((
+        InGameEntity,
         Sprite {
             color: Color::WHITE,
             custom_size: Some(Vec2::new(w + thickness, thickness)),
@@ -475,6 +494,7 @@ pub fn setup(
 
     // Left
     commands.spawn((
+        InGameEntity,
         Sprite {
             color: Color::WHITE,
             custom_size: Some(Vec2::new(thickness, h + thickness)),
@@ -487,6 +507,7 @@ pub fn setup(
 
     // Right
     commands.spawn((
+        InGameEntity,
         Sprite {
             color: Color::WHITE,
             custom_size: Some(Vec2::new(thickness, h + thickness)),
@@ -500,4 +521,35 @@ pub fn setup(
     // El mensaje Ready ahora se envía automáticamente en el thread de red después de recibir Welcome
 
     println!("✅ Cliente configurado y campo listo");
+}
+
+/// Limpia todas las entidades del juego al salir de InGame
+pub fn cleanup_game(
+    mut commands: Commands,
+    entities: Query<Entity, With<InGameEntity>>,
+    mut local_players: ResMut<crate::local_players::LocalPlayers>,
+    mut network_channels: ResMut<crate::resources::NetworkChannels>,
+    mut loaded_map: ResMut<crate::resources::LoadedMap>,
+) {
+    println!("🧹 Limpiando entidades del juego...");
+
+    let count = entities.iter().count();
+    for entity in entities.iter() {
+        commands.entity(entity).despawn();
+    }
+
+    // Resetear server_player_id (el servidor asignará nuevos al reconectar)
+    for player in &mut local_players.players {
+        player.server_player_id = None;
+    }
+
+    // Limpiar canales de red (el hilo ya terminó)
+    network_channels.receiver = None;
+    network_channels.sender = None;
+    network_channels.control_sender = None;
+
+    // Resetear mapa cargado (para que is_changed() detecte el nuevo al reconectar)
+    loaded_map.0 = None;
+
+    println!("✅ {} entidades del juego limpiadas", count);
 }

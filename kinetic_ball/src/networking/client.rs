@@ -17,10 +17,12 @@ pub fn start_connection(
 ) {
     let (network_tx, network_rx) = mpsc::channel();
     let (input_tx, input_rx) = mpsc::channel();
+    let (control_tx, control_rx) = mpsc::channel();
 
     // Guardar los canales
     channels.receiver = Some(Arc::new(Mutex::new(network_rx)));
     channels.sender = Some(input_tx);
+    channels.control_sender = Some(control_tx);
 
     let ws_url = config.ws_url();
     let room = config.room.clone();
@@ -51,7 +53,7 @@ pub fn start_connection(
             .expect("Fallo al crear Runtime de Tokio");
 
         rt.block_on(async {
-            start_webrtc_client(ws_url, room, player_names, network_tx, input_rx).await;
+            start_webrtc_client(ws_url, room, player_names, network_tx, input_rx, control_rx).await;
         });
         println!("🌐 [Red] El hilo de red HA TERMINADO");
     });
@@ -76,6 +78,7 @@ pub async fn start_webrtc_client(
     player_names: Vec<String>,
     network_tx: mpsc::Sender<ServerMessage>,
     input_rx: mpsc::Receiver<(u32, PlayerInput)>,
+    control_rx: mpsc::Receiver<ControlMessage>,
 ) {
     // Conectar al proxy
     let room_url = format!("{}/{}", server_url, room);
@@ -244,6 +247,25 @@ pub async fn start_webrtc_client(
         } else {
             // Descartar inputs hasta que tengamos servidor
             while input_rx.try_recv().is_ok() {}
+        }
+
+        // Procesar mensajes de control desde Bevy (Leave, etc.)
+        if let Some(server_id) = server_peer_id {
+            while let Ok(control_msg) = control_rx.try_recv() {
+                match &control_msg {
+                    ControlMessage::Leave { player_id } => {
+                        println!("📤 [Red] Enviando LEAVE para jugador {}...", player_id);
+                        if let Ok(data) = bincode::serialize(&control_msg) {
+                            socket.channel_mut(0).send(data.into(), server_id);
+                        }
+                        // Dar tiempo para que el mensaje se envíe
+                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                        println!("🚪 [Red] Cerrando conexión...");
+                        return; // Terminar el loop de red
+                    }
+                    _ => {}
+                }
+            }
         }
 
         // Pequeña pausa

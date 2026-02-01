@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::assets::SPLIT_SCREEN_SHADER_HANDLE;
 use crate::keybindings::AppConfig;
-use crate::shared::protocol::{PlayerInput, ServerMessage};
+use crate::shared::protocol::{ControlMessage, PlayerInput, ServerMessage};
 use crate::states::RoomInfo;
 
 // ============================================================================
@@ -17,6 +17,20 @@ use crate::states::RoomInfo;
 
 #[derive(Resource, Default)]
 pub struct GameTick(pub u32);
+
+/// Estado del panel de administración en el juego
+#[derive(Resource, Default)]
+pub struct AdminPanelState {
+    pub is_open: bool,
+    pub selected_player_id: Option<u32>,
+}
+
+/// Solicitud para salir de la sala (se procesa en cleanup)
+#[derive(Resource, Default)]
+pub struct LeaveRoomRequest {
+    pub pending: bool,
+    pub player_ids: Vec<u32>,
+}
 
 // Resource para trackear el input anterior (legacy, mantenido por compatibilidad)
 #[derive(Resource, Default)]
@@ -32,6 +46,8 @@ pub struct PreviousInput(pub PlayerInput);
 pub struct NetworkChannels {
     pub receiver: Option<Arc<Mutex<mpsc::Receiver<ServerMessage>>>>,
     pub sender: Option<mpsc::Sender<(u32, PlayerInput)>>,
+    /// Canal para enviar mensajes de control (Leave, etc.)
+    pub control_sender: Option<mpsc::Sender<ControlMessage>>,
 }
 
 #[derive(Resource)]

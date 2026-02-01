@@ -3,6 +3,15 @@ use bevy::prelude::*;
 use crate::shared::protocol::PlayerMovement;
 
 // ============================================================================
+// GAME LIFECYCLE
+// ============================================================================
+
+/// Marcador para todas las entidades creadas durante InGame.
+/// Se usa para limpiar todo al salir de la sala.
+#[derive(Component)]
+pub struct InGameEntity;
+
+// ============================================================================
 // FIELD COMPONENTS
 // ============================================================================
 

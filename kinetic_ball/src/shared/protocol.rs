@@ -70,6 +70,10 @@ pub enum ControlMessage {
         client_version: Option<ProtocolVersion>,
     },
     Ready,
+    /// El cliente notifica que está saliendo de la sala
+    Leave {
+        player_id: u32,
+    },
 
     // Del servidor
     Welcome {

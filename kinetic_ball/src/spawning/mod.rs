@@ -7,9 +7,9 @@ use bevy::sprite_render::ColorMaterial;
 use crate::assets::EmbeddedAssets;
 use crate::color_utils::{generate_unique_player_color, get_team_colors};
 use crate::components::{
-    CurveAction, Interpolated, KickChargeBar, KickChargeBarCurveLeft, KickChargeBarCurveRight,
-    PlayerNameText, PlayerOutline, PlayerSprite, RemoteBall, RemotePlayer, SlideCubeVisual,
-    StaminChargeBar,
+    CurveAction, InGameEntity, Interpolated, KickChargeBar, KickChargeBarCurveLeft,
+    KickChargeBarCurveRight, PlayerNameText, PlayerOutline, PlayerSprite, RemoteBall,
+    RemotePlayer, SlideCubeVisual, StaminChargeBar,
 };
 use crate::events::{SpawnBallEvent, SpawnPlayerEvent};
 use crate::game::spawn_key_visual_2d;
@@ -30,6 +30,7 @@ pub fn handle_spawn_ball(
 
         commands
             .spawn((
+                InGameEntity,
                 Transform::from_xyz(event.position.0, event.position.1, 10.0),
                 Visibility::default(),
                 RemoteBall,
@@ -111,6 +112,7 @@ pub fn handle_spawn_player(
 
         commands
             .spawn((
+                InGameEntity,
                 Transform::from_xyz(ps.position.x, ps.position.y, 10.0),
                 Visibility::default(),
                 RemotePlayer {

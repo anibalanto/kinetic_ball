@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{egui, EguiContexts, PrimaryEguiContext};
 
 use crate::components::MenuCamera;
 use crate::resources::ConnectionConfig;
@@ -8,7 +8,7 @@ use crate::states::AppState;
 pub fn setup_menu_camera_if_needed(mut commands: Commands, menu_camera: Query<&MenuCamera>) {
     // Solo crear cámara si no existe
     if menu_camera.is_empty() {
-        commands.spawn((Camera2d, MenuCamera));
+        commands.spawn((Camera2d, MenuCamera, PrimaryEguiContext));
     }
 }
 
