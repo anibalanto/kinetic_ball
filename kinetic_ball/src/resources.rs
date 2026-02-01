@@ -59,11 +59,33 @@ pub struct PlayerColors {
 // ROOM RESOURCES
 // ============================================================================
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct RoomList {
     pub rooms: Vec<RoomInfo>,
     pub loading: bool,
     pub error: Option<String>,
+    // Filtros
+    pub filter_name: String,
+    pub filter_my_hosts_only: bool,
+    pub filter_show_full: bool,
+    pub filter_show_available: bool,
+    // Conexión directa por UUID
+    pub direct_connect_id: String,
+}
+
+impl Default for RoomList {
+    fn default() -> Self {
+        Self {
+            rooms: Vec::new(),
+            loading: false,
+            error: None,
+            filter_name: String::new(),
+            filter_my_hosts_only: false,
+            filter_show_full: true,
+            filter_show_available: true,
+            direct_connect_id: String::new(),
+        }
+    }
 }
 
 #[derive(Resource, Default)]
@@ -82,6 +104,7 @@ pub struct CreateRoomConfig {
     pub max_players: u8,
     pub map_path: String,
     pub scale: f32,
+    pub created_room_ids: Vec<String>,
 }
 
 impl Default for CreateRoomConfig {
@@ -91,6 +114,7 @@ impl Default for CreateRoomConfig {
             max_players: 4,
             map_path: String::new(), // Vacío = usar mapa embebido por defecto
             scale: 1.0,
+            created_room_ids: Vec::new(),
         }
     }
 }

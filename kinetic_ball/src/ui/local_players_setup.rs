@@ -12,7 +12,7 @@ pub fn local_players_setup_ui(
     mut local_players: ResMut<LocalPlayers>,
     available_devices: Res<AvailableInputDevices>,
     mut ui_state: ResMut<LocalPlayersUIState>,
-    config: Res<ConnectionConfig>,
+    mut config: ResMut<ConnectionConfig>,
     mut next_state: ResMut<NextState<AppState>>,
     gilrs: Option<Res<GilrsWrapper>>,
     gamepad_bindings_map: Res<GamepadBindingsMap>,
@@ -21,8 +21,31 @@ pub fn local_players_setup_ui(
     let Ok(ctx) = contexts.ctx_mut() else { return };
 
     egui::CentralPanel::default().show(ctx, |ui| {
+        // Botón de configuración en la esquina superior derecha
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+            if ui
+                .button(egui::RichText::new("⚙").size(24.0))
+                .on_hover_text("Configurar servidor")
+                .clicked()
+            {
+                ui_state.show_server_config = !ui_state.show_server_config;
+            }
+
+            // Panel de configuración del servidor (si está visible)
+            if ui_state.show_server_config {
+                ui.group(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Servidor:");
+                        ui.add_sized(
+                            [200.0, 24.0],
+                            egui::TextEdit::singleline(&mut config.server_host),
+                        );
+                    });
+                });
+            }
+        });
+
         ui.vertical_centered(|ui| {
-            ui.add_space(30.0);
             ui.heading(egui::RichText::new("Configurar Jugadores Locales").size(36.0));
             ui.add_space(10.0);
             ui.label(
@@ -241,37 +264,21 @@ pub fn local_players_setup_ui(
 
             ui.add_space(30.0);
 
-            // Botones de acción
-            ui.horizontal(|ui| {
-                // Volver
-                if ui
-                    .add_sized(
-                        [120.0, 40.0],
-                        egui::Button::new(egui::RichText::new("Volver").size(18.0)),
-                    )
-                    .clicked()
-                {
-                    next_state.set(AppState::Menu);
-                }
-
-                ui.add_space(20.0);
-
-                // Continuar (ir a selección de sala)
-                let can_continue = !local_players.is_empty();
-                if ui
-                    .add_enabled(
-                        can_continue,
-                        egui::Button::new(egui::RichText::new("Continuar").size(18.0)),
-                    )
-                    .clicked()
-                {
-                    println!(
-                        "🎮 {} jugadores locales configurados, buscando salas...",
-                        local_players.count()
-                    );
-                    next_state.set(AppState::RoomSelection);
-                }
-            });
+            // Botón de continuar
+            let can_continue = !local_players.is_empty();
+            if ui
+                .add_enabled(
+                    can_continue,
+                    egui::Button::new(egui::RichText::new("Continuar →").size(18.0)),
+                )
+                .clicked()
+            {
+                println!(
+                    "🎮 {} jugadores locales configurados, buscando salas...",
+                    local_players.count()
+                );
+                next_state.set(AppState::RoomSelection);
+            }
         });
     });
 }

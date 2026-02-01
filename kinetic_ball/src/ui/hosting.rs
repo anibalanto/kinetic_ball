@@ -6,7 +6,7 @@ use crate::host;
 use crate::resources::{ConnectionConfig, CreateRoomConfig};
 use crate::states::AppState;
 
-pub fn start_hosting(config: Res<ConnectionConfig>, create_config: Res<CreateRoomConfig>) {
+pub fn start_hosting(config: Res<ConnectionConfig>, mut create_config: ResMut<CreateRoomConfig>) {
     let server_host = config.server_host.clone();
     let room_name = create_config.room_name.clone();
     let max_players = create_config.max_players;
@@ -25,6 +25,9 @@ pub fn start_hosting(config: Res<ConnectionConfig>, create_config: Res<CreateRoo
             .unwrap()
             .as_secs()
     );
+
+    // Guardar el room_id para poder entrar después
+    create_config.created_room_ids.push(room_id.clone());
 
     println!("🚀 Iniciando host...");
     println!("   Sala: {}", room_name);
@@ -49,6 +52,7 @@ pub fn hosting_ui(
     mut contexts: EguiContexts,
     mut next_state: ResMut<NextState<AppState>>,
     create_config: Res<CreateRoomConfig>,
+    mut connection_config: ResMut<ConnectionConfig>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
 
@@ -70,25 +74,40 @@ pub fn hosting_ui(
             ui.label(
                 egui::RichText::new("El servidor está corriendo en segundo plano.").size(16.0),
             );
-            ui.label(
-                egui::RichText::new("Los jugadores pueden unirse desde 'Ver Salas'.").size(16.0),
-            );
 
-            ui.add_space(50.0);
+            ui.add_space(40.0);
 
+            // Botón Entrar al Host
             if ui
                 .add_sized(
                     [200.0, 50.0],
-                    egui::Button::new(egui::RichText::new("← Volver al Menú").size(20.0)),
+                    egui::Button::new(egui::RichText::new("▶ Entrar al Host").size(20.0)),
                 )
                 .clicked()
             {
-                next_state.set(AppState::Menu);
+                if let Some(room_id) = create_config.created_room_ids.last() {
+                    connection_config.room = room_id.clone();
+                    println!("🎮 Entrando a sala propia: {}", room_id);
+                    next_state.set(AppState::Connecting);
+                }
+            }
+
+            ui.add_space(20.0);
+
+            // Botón Volver
+            if ui
+                .add_sized(
+                    [200.0, 40.0],
+                    egui::Button::new(egui::RichText::new("← Volver").size(18.0)),
+                )
+                .clicked()
+            {
+                next_state.set(AppState::RoomSelection);
             }
 
             ui.add_space(10.0);
             ui.label(
-                egui::RichText::new("Nota: El servidor seguirá activo aunque vuelvas al menú")
+                egui::RichText::new("Nota: El servidor seguirá activo aunque vuelvas")
                     .size(12.0)
                     .color(egui::Color32::GRAY),
             );

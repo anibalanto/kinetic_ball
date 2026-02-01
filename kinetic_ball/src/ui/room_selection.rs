@@ -3,7 +3,7 @@ use bevy_egui::{egui, EguiContexts};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-use crate::resources::{ConnectionConfig, RoomFetchChannel, RoomList, SelectedRoom};
+use crate::resources::{ConnectionConfig, CreateRoomConfig, RoomFetchChannel, RoomList, SelectedRoom};
 use crate::states::{AppState, RoomInfo, RoomStatus};
 
 pub fn fetch_rooms(
@@ -90,6 +90,7 @@ pub fn room_selection_ui(
     mut selected_room: ResMut<SelectedRoom>,
     mut next_state: ResMut<NextState<AppState>>,
     mut fetch_channel: ResMut<RoomFetchChannel>,
+    create_config: Res<CreateRoomConfig>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
 
@@ -108,7 +109,7 @@ pub fn room_selection_ui(
                     )
                     .clicked()
                 {
-                    next_state.set(AppState::Menu);
+                    next_state.set(AppState::LocalPlayersSetup);
                 }
 
                 ui.add_space(20.0);
@@ -117,8 +118,9 @@ pub fn room_selection_ui(
                 if ui
                     .add_enabled(
                         refresh_enabled,
-                        egui::Button::new(egui::RichText::new("🔄 Actualizar").size(16.0)),
+                        egui::Button::new(egui::RichText::new("🔄").size(16.0)),
                     )
+                    .on_hover_text("Actualizar lista")
                     .clicked()
                 {
                     // Trigger refresh
@@ -161,9 +163,47 @@ pub fn room_selection_ui(
                         let _ = tx.send(result);
                     });
                 }
+
+                ui.add_space(20.0);
+
+                // Botón crear host
+                if ui
+                    .add_sized(
+                        [120.0, 30.0],
+                        egui::Button::new(egui::RichText::new("+ Crear Host").size(16.0)),
+                    )
+                    .clicked()
+                {
+                    next_state.set(AppState::CreateRoom);
+                }
             });
 
-            ui.add_space(20.0);
+            ui.add_space(10.0);
+
+            // Filtros
+            ui.group(|ui| {
+                ui.set_width(500.0);
+                ui.horizontal(|ui| {
+                    ui.label("Buscar:");
+                    ui.add_sized(
+                        [200.0, 20.0],
+                        egui::TextEdit::singleline(&mut room_list.filter_name)
+                            .hint_text("nombre..."),
+                    );
+                });
+
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut room_list.filter_show_available, "Disponibles");
+                    ui.checkbox(&mut room_list.filter_show_full, "Llenas");
+
+                    // Solo mostrar checkbox "Mis hosts" si hay hosts creados
+                    if !create_config.created_room_ids.is_empty() {
+                        ui.checkbox(&mut room_list.filter_my_hosts_only, "Mis hosts");
+                    }
+                });
+            });
+
+            ui.add_space(10.0);
 
             // Estado de carga o error
             if room_list.loading {
@@ -173,17 +213,39 @@ pub fn room_selection_ui(
                 ui.colored_label(egui::Color32::RED, format!("Error: {}", error));
             }
 
-            ui.add_space(10.0);
+            // Filtrar salas
+            let filtered_rooms: Vec<&RoomInfo> = room_list
+                .rooms
+                .iter()
+                .filter(|room| {
+                    // Filtro por nombre
+                    let name_match = room_list.filter_name.is_empty()
+                        || room.name.to_lowercase().contains(&room_list.filter_name.to_lowercase());
+
+                    // Filtro mis hosts (buscar en todos los room_ids creados)
+                    let my_hosts_match = !room_list.filter_my_hosts_only
+                        || create_config.created_room_ids.iter().any(|id| room.room_id == *id);
+
+                    // Filtro por estado
+                    let is_full = matches!(room.status, RoomStatus::Full);
+                    let status_match = (room_list.filter_show_full && is_full)
+                        || (room_list.filter_show_available && !is_full);
+
+                    name_match && my_hosts_match && status_match
+                })
+                .collect();
+
+            ui.add_space(5.0);
 
             // Lista de salas
             egui::ScrollArea::vertical()
-                .max_height(400.0)
+                .max_height(350.0)
                 .show(ui, |ui| {
-                    if room_list.rooms.is_empty() && !room_list.loading {
-                        ui.label("No hay salas disponibles");
+                    if filtered_rooms.is_empty() && !room_list.loading {
+                        ui.label("No hay salas que coincidan con los filtros");
                     }
 
-                    for room in &room_list.rooms {
+                    for room in filtered_rooms {
                         let is_selected = selected_room.room_id.as_ref() == Some(&room.room_id);
                         let is_full = matches!(room.status, RoomStatus::Full);
 
@@ -293,6 +355,26 @@ pub fn room_selection_ui(
                     next_state.set(AppState::Connecting);
                 }
             }
+
+            ui.add_space(20.0);
+
+            // Conexión directa por UUID
+            ui.group(|ui| {
+                ui.set_width(500.0);
+                ui.horizontal(|ui| {
+                    ui.label("Conectar por ID:");
+                    ui.add_sized(
+                        [300.0, 24.0],
+                        egui::TextEdit::singleline(&mut room_list.direct_connect_id)
+                            .hint_text("room_123456789..."),
+                    );
+                    if ui.button("Entrar").clicked() && !room_list.direct_connect_id.is_empty() {
+                        config.room = room_list.direct_connect_id.clone();
+                        println!("🎮 Entrando a sala por ID: {}", config.room);
+                        next_state.set(AppState::Connecting);
+                    }
+                });
+            });
 
             ui.add_space(10.0);
             ui.label(

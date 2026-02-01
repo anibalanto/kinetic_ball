@@ -25,7 +25,7 @@ pub fn create_room_ui(
                 )
                 .clicked()
             {
-                next_state.set(AppState::Menu);
+                next_state.set(AppState::RoomSelection);
             }
 
             ui.add_space(30.0);

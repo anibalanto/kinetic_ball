@@ -218,6 +218,8 @@ pub struct LocalPlayersUIState {
     pub selected_device_index: usize,
     /// Mensaje de error o estado
     pub status_message: Option<String>,
+    /// Mostrar panel de configuración del servidor
+    pub show_server_config: bool,
 }
 
 // ============================================================================
