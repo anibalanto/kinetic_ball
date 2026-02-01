@@ -368,7 +368,9 @@ pub fn attract_ball(
         let player_id = player.id;
 
         // Con Sprint no hay interacción con la pelota
-        if game_input.is_pressed(player_id, GameAction::Sprint) {
+        if game_input.is_pressed(player_id, GameAction::Sprint)
+            || game_input.is_pressed(player_id, GameAction::StopInteract)
+        {
             continue;
         }
 
