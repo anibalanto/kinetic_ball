@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use super::engine::spawn_physics;
 use super::host::{
-    Ball, BroadcastTimer, GameInputManager, GameTick, LoadedMap, NetworkEvent, NetworkReceiver,
-    NetworkSender, NetworkState, OutgoingMessage, Player, Sphere,
+    Ball, BroadcastTimer, GameInputManager, GameTick, HostMatchSlots, LoadedMap, NetworkEvent,
+    NetworkReceiver, NetworkSender, NetworkState, OutgoingMessage, Player, Sphere,
 };
 
 // ============================================================================
@@ -199,6 +199,43 @@ pub fn handle_control_message_typed(
             let _ = event_tx.send(NetworkEvent::PlayerLeave { player_id });
             None
         }
+        ControlMessage::MovePlayer {
+            player_id,
+            team_index,
+            is_starter,
+        } => {
+            println!(
+                "🔄 MovePlayer request: player {} -> team {:?}, starter {:?}",
+                player_id, team_index, is_starter
+            );
+            let _ = event_tx.send(NetworkEvent::MovePlayer {
+                admin_peer_id: peer_id,
+                player_id,
+                team_index,
+                is_starter,
+            });
+            None
+        }
+        ControlMessage::KickPlayer { player_id } => {
+            println!("👢 KickPlayer request: player {}", player_id);
+            let _ = event_tx.send(NetworkEvent::KickPlayer {
+                admin_peer_id: peer_id,
+                player_id,
+            });
+            None
+        }
+        ControlMessage::ToggleAdmin { player_id, is_admin } => {
+            println!(
+                "👑 ToggleAdmin request: player {} -> admin={}",
+                player_id, is_admin
+            );
+            let _ = event_tx.send(NetworkEvent::ToggleAdmin {
+                admin_peer_id: peer_id,
+                player_id,
+                is_admin,
+            });
+            None
+        }
         _ => {
             // Otros mensajes de control del servidor no deberían venir del cliente
             None
@@ -237,7 +274,11 @@ pub fn process_network_messages(
     loaded_map: Res<LoadedMap>,
     mut game_input: ResMut<GameInputManager>,
     mut players: Query<(&mut Player, Entity)>,
+    mut match_slots: ResMut<HostMatchSlots>,
+    mut sphere_query: Query<(&mut Transform, &mut Velocity, &mut CollisionGroups), With<Sphere>>,
 ) {
+    let mut slots_changed = false;
+
     while let Ok(event) = network_rx.0.lock().unwrap().try_recv() {
         match event {
             NetworkEvent::NewPlayer { id, name, peer_id } => {
@@ -259,7 +300,18 @@ pub fn process_network_messages(
                     });
                 }
 
-                spawn_physics(&mut commands, id, name, peer_id, &config);
+                spawn_physics(&mut commands, id, name, peer_id, &config, &mut match_slots.0);
+                slots_changed = true;
+
+                // Send current slots state to the new player
+                let slots_msg = ControlMessage::SlotsUpdated(match_slots.0.clone());
+                if let Ok(data) = bincode::serialize(&slots_msg) {
+                    let _ = network_tx.0.send(OutgoingMessage::ToOne {
+                        peer_id,
+                        channel: 0,
+                        data,
+                    });
+                }
             }
 
             NetworkEvent::PlayerInput { peer_id, input } => {
@@ -280,6 +332,11 @@ pub fn process_network_messages(
             NetworkEvent::PlayerDisconnected { peer_id } => {
                 for (player, entity) in players.iter() {
                     if player.peer_id == peer_id {
+                        // Remove from slots
+                        match_slots.0.remove_player(player.id);
+                        match_slots.0.admins.remove(&player.id);
+                        slots_changed = true;
+
                         // Notificar a todos los clientes que este jugador se desconectó
                         let disconnect_msg = ControlMessage::PlayerDisconnected {
                             player_id: player.id,
@@ -321,6 +378,11 @@ pub fn process_network_messages(
             NetworkEvent::PlayerLeave { player_id } => {
                 for (player, entity) in players.iter() {
                     if player.id == player_id {
+                        // Remove from slots
+                        match_slots.0.remove_player(player.id);
+                        match_slots.0.admins.remove(&player.id);
+                        slots_changed = true;
+
                         // Notificar a todos los clientes que este jugador se fue
                         let disconnect_msg = ControlMessage::PlayerDisconnected { player_id };
                         if let Ok(data) = bincode::serialize(&disconnect_msg) {
@@ -343,6 +405,185 @@ pub fn process_network_messages(
                     }
                 }
             }
+
+            NetworkEvent::MovePlayer {
+                admin_peer_id,
+                player_id,
+                team_index,
+                is_starter,
+            } => {
+                // Find admin's player_id from peer_id
+                let admin_player_id = players
+                    .iter()
+                    .find(|(p, _)| p.peer_id == admin_peer_id)
+                    .map(|(p, _)| p.id);
+
+                // Verify admin has permission
+                if let Some(admin_id) = admin_player_id {
+                    if match_slots.0.is_admin(admin_id) {
+                        // Check if player was a starter before
+                        let was_starter = match_slots.0.is_starter(player_id);
+
+                        // Move the player in slots
+                        match_slots.0.move_player(player_id, team_index, is_starter);
+                        slots_changed = true;
+
+                        // Determine if now a starter
+                        let now_starter = is_starter == Some(true);
+
+                        // Find the player and update physics
+                        for (mut player, _) in players.iter_mut() {
+                            if player.id == player_id {
+                                // Update team_index if moving to a team
+                                if let Some(t_idx) = team_index {
+                                    println!(
+                                        "🔄 [Server] Jugador {} team_index: {} -> {}",
+                                        player_id, player.team_index, t_idx
+                                    );
+                                    player.team_index = t_idx;
+                                }
+
+                                // Handle physics activation/deactivation
+                                if let Ok((mut transform, mut velocity, mut collision_groups)) =
+                                    sphere_query.get_mut(player.sphere)
+                                {
+                                    if was_starter && !now_starter {
+                                        // Leaving field: move far away and disable collisions
+                                        transform.translation.x = 99999.0;
+                                        transform.translation.y = 99999.0;
+                                        velocity.linvel = Vec2::ZERO;
+                                        velocity.angvel = 0.0;
+                                        // Disable all collisions
+                                        collision_groups.memberships = Group::NONE;
+                                        collision_groups.filters = Group::NONE;
+                                        println!(
+                                            "🚫 Jugador {} física desactivada (fuera del campo)",
+                                            player_id
+                                        );
+                                    } else if !was_starter && now_starter {
+                                        // Entering field: spawn at team position
+                                        let spawn_x = if player.team_index == 0 {
+                                            -500.0 - (player_id as f32 * 100.0)
+                                        } else {
+                                            500.0 + (player_id as f32 * 100.0)
+                                        };
+                                        transform.translation.x = spawn_x;
+                                        transform.translation.y = 0.0;
+                                        // Re-enable collisions (GROUP_4 = players)
+                                        collision_groups.memberships = Group::GROUP_4;
+                                        collision_groups.filters = Group::ALL ^ Group::GROUP_5;
+                                        println!(
+                                            "✅ Jugador {} física activada (en el campo)",
+                                            player_id
+                                        );
+                                    }
+                                }
+
+                                println!(
+                                    "🔄 Jugador {} movido: team={:?}, starter={:?}",
+                                    player_id, team_index, is_starter
+                                );
+                                break;
+                            }
+                        }
+                    } else {
+                        println!(
+                            "⚠️ Player {} tried to move player but is not admin",
+                            admin_id
+                        );
+                    }
+                }
+            }
+
+            NetworkEvent::KickPlayer {
+                admin_peer_id,
+                player_id,
+            } => {
+                // Find admin's player_id from peer_id
+                let admin_player_id = players
+                    .iter()
+                    .find(|(p, _)| p.peer_id == admin_peer_id)
+                    .map(|(p, _)| p.id);
+
+                // Verify admin has permission
+                if let Some(admin_id) = admin_player_id {
+                    if match_slots.0.is_admin(admin_id) {
+                        // Find and kick the player
+                        for (player, entity) in players.iter() {
+                            if player.id == player_id {
+                                // Remove from slots
+                                match_slots.0.remove_player(player.id);
+                                match_slots.0.admins.remove(&player.id);
+                                slots_changed = true;
+
+                                // Notify all clients
+                                let disconnect_msg =
+                                    ControlMessage::PlayerDisconnected { player_id };
+                                if let Ok(data) = bincode::serialize(&disconnect_msg) {
+                                    let _ = network_tx.0.send(OutgoingMessage::Broadcast {
+                                        channel: 0,
+                                        data,
+                                    });
+                                }
+
+                                // Despawn
+                                commands.entity(player.sphere).despawn();
+                                commands.entity(entity).despawn();
+                                game_input.remove_player(player.id);
+                                println!("👢 Jugador {} expulsado por admin {}", player_id, admin_id);
+                                break;
+                            }
+                        }
+                    } else {
+                        println!(
+                            "⚠️ Player {} tried to kick player but is not admin",
+                            admin_id
+                        );
+                    }
+                }
+            }
+
+            NetworkEvent::ToggleAdmin {
+                admin_peer_id,
+                player_id,
+                is_admin,
+            } => {
+                // Find admin's player_id from peer_id
+                let admin_player_id = players
+                    .iter()
+                    .find(|(p, _)| p.peer_id == admin_peer_id)
+                    .map(|(p, _)| p.id);
+
+                // Verify sender is admin
+                if let Some(admin_id) = admin_player_id {
+                    if match_slots.0.is_admin(admin_id) {
+                        if is_admin {
+                            match_slots.0.add_admin(player_id);
+                            println!("👑 Jugador {} ahora es admin (otorgado por {})", player_id, admin_id);
+                        } else {
+                            match_slots.0.remove_admin(player_id);
+                            println!("👑 Jugador {} ya no es admin (removido por {})", player_id, admin_id);
+                        }
+                        slots_changed = true;
+                    } else {
+                        println!(
+                            "⚠️ Player {} tried to toggle admin but is not admin",
+                            admin_id
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Broadcast slots update if changed
+    if slots_changed {
+        let slots_msg = ControlMessage::SlotsUpdated(match_slots.0.clone());
+        if let Ok(data) = bincode::serialize(&slots_msg) {
+            let _ = network_tx.0.send(OutgoingMessage::Broadcast {
+                channel: 0,
+                data,
+            });
         }
     }
 }
@@ -355,6 +596,7 @@ pub fn broadcast_game_state(
     sphere_query: Query<(&Transform, &Velocity), With<Sphere>>,
     ball: Query<(&Transform, &Velocity, &Ball), Without<Sphere>>,
     network_tx: Res<NetworkSender>,
+    match_slots: Res<HostMatchSlots>,
 ) {
     // Actualizar timer
     broadcast_timer.0.tick(time.delta());
@@ -366,10 +608,15 @@ pub fn broadcast_game_state(
 
     tick.0 += 1;
 
-    // Construir estado
+    // Construir estado - only include starters (players on field with physics)
     let player_states: Vec<PlayerState> = players
         .iter()
         .filter_map(|player| {
+            // Only include starters in game state
+            if !match_slots.0.is_starter(player.id) {
+                return None;
+            }
+
             if let Ok((transform, velocity)) = sphere_query.get(player.sphere) {
                 // Extraer rotación Z del quaternion
                 let (_, _, rotation_z) = transform.rotation.to_euler(EulerRot::XYZ);

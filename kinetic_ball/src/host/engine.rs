@@ -52,7 +52,11 @@ pub fn spawn_physics(
     name: String,
     peer_id: PeerId,
     config: &Res<GameConfig>,
+    match_slots: &mut crate::shared::MatchSlots,
 ) {
+    // Add player as starter by default (alternating teams based on ID)
+    let team_index = (id % 2) as u8;
+    match_slots.add_starter(id, team_index);
     // Spawn física del jugador (Sphere)
     let spawn_x = ((id % 3) as f32 - 1.0) * 200.0;
     let spawn_y = ((id / 3) as f32 - 1.0) * 200.0;

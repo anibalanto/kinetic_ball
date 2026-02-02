@@ -9,7 +9,7 @@ use crate::components::{
 };
 use crate::events::{SpawnBallEvent, SpawnPlayerEvent};
 use crate::local_players::LocalPlayers;
-use crate::resources::{GameTick, LoadedMap, NetworkChannels};
+use crate::resources::{AdminPanelState, ClientMatchSlots, GameTick, LoadedMap, NetworkChannels};
 use crate::shared::protocol::{GameConfig, ServerMessage};
 
 #[derive(SystemParam)]
@@ -24,6 +24,8 @@ pub struct NetworkParams<'w, 's> {
     pub game_tick: ResMut<'w, GameTick>,
     pub spawn_ball_events: MessageWriter<'w, SpawnBallEvent>,
     pub spawn_player_events: MessageWriter<'w, SpawnPlayerEvent>,
+    pub match_slots: ResMut<'w, ClientMatchSlots>,
+    pub admin_state: ResMut<'w, AdminPanelState>,
 }
 
 #[derive(SystemParam)]
@@ -79,6 +81,8 @@ pub fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQ
     let game_tick = &mut params.game_tick;
     let spawn_ball_events = &mut params.spawn_ball_events;
     let spawn_player_events = &mut params.spawn_player_events;
+    let match_slots = &mut params.match_slots;
+    let admin_state = &mut params.admin_state;
 
     let ball_q = &mut queries.ball_q;
     let players_q = &mut queries.players_q;
@@ -226,6 +230,27 @@ pub fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQ
                     }
                 }
             }
+            ServerMessage::SlotsUpdated(slots) => {
+                println!(
+                    "📊 [Bevy] Slots actualizados - Spectators: {}, Team0: {}/{}, Team1: {}/{}",
+                    slots.spectators.len(),
+                    slots.teams[0].starters.len(),
+                    slots.teams[0].substitutes.len(),
+                    slots.teams[1].starters.len(),
+                    slots.teams[1].substitutes.len()
+                );
+
+                // Update local slots copy
+                match_slots.0 = slots.clone();
+
+                // Update admin status for local players
+                if let Some(player_id) = my_id.0 {
+                    admin_state.is_admin = slots.is_admin(player_id);
+                    if admin_state.is_admin {
+                        println!("👑 [Bevy] Eres administrador de la sala");
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -251,10 +276,57 @@ pub fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQ
             });
         }
 
+        // Primero: detectar jugadores que cambiaron de equipo y despawnearlos
+        // Esto fuerza un respawn con los colores correctos
+        let mut team_changed_ids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut entities_to_despawn: Vec<Entity> = Vec::new();
+
+        for ps in &players {
+            for (entity, _, _, rp, _) in players_q.iter() {
+                if rp.id == ps.id && rp.team_index != ps.team_index {
+                    println!(
+                        "🔄 [Client] Jugador {} cambió de equipo {} -> {}, despawneando para respawn",
+                        rp.id, rp.team_index, ps.team_index
+                    );
+                    team_changed_ids.insert(ps.id);
+                    entities_to_despawn.push(entity);
+                    break;
+                }
+            }
+        }
+
+        // Despawnear jugadores que cambiaron de equipo
+        for entity in entities_to_despawn {
+            commands.entity(entity).despawn();
+        }
+
         // Actualizar Jugadores
         for ps in players {
+            // Si cambió de equipo, ya fue despawneado, forzar respawn
+            if team_changed_ids.contains(&ps.id) {
+                if !spawned_this_frame.contains(&ps.id) {
+                    spawned_this_frame.insert(ps.id);
+
+                    let is_local = local_players
+                        .players
+                        .iter()
+                        .any(|lp| lp.server_player_id == Some(ps.id));
+
+                    println!(
+                        "🎨 [Client] Respawneando jugador {} con equipo {}",
+                        ps.id, ps.team_index
+                    );
+
+                    spawn_player_events.write(SpawnPlayerEvent {
+                        player_state: ps,
+                        is_local,
+                    });
+                }
+                continue;
+            }
+
             let mut found = false;
-            for (_entity, mut interp, mut transform, mut rp, _children) in players_q.iter_mut() {
+            for (_entity, mut interp, mut transform, mut rp, _) in players_q.iter_mut() {
                 if rp.id == ps.id {
                     interp.target_position = ps.position;
                     interp.target_velocity = Vec2::new(ps.velocity.0, ps.velocity.1);
@@ -267,6 +339,7 @@ pub fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQ
                     rp.stamin_charge = ps.stamin_charge;
                     rp.active_movement = ps.active_movement.clone();
                     rp.mode_cube_active = ps.mode_cube_active;
+                    rp.team_index = ps.team_index;
 
                     found = true;
                     break;
@@ -287,6 +360,38 @@ pub fn process_network_messages(mut params: NetworkParams, mut queries: NetworkQ
                     is_local,
                 });
             }
+        }
+    }
+
+    // Process slots: despawn non-starters
+    // Only process if we have received slots from server (not empty)
+    let slots = &match_slots.0;
+    let has_any_slots = !slots.teams[0].starters.is_empty()
+        || !slots.teams[1].starters.is_empty()
+        || !slots.spectators.is_empty()
+        || !slots.teams[0].substitutes.is_empty()
+        || !slots.teams[1].substitutes.is_empty();
+
+    if has_any_slots {
+        let all_starters: std::collections::HashSet<u32> = slots
+            .teams
+            .iter()
+            .flat_map(|t| t.starters.iter().copied())
+            .collect();
+
+        // Collect entities to despawn (can't despawn while iterating)
+        let mut to_despawn: Vec<Entity> = Vec::new();
+
+        for (entity, _, _, rp, _) in players_q.iter() {
+            if !all_starters.contains(&rp.id) {
+                to_despawn.push(entity);
+                println!("🚫 [Bevy] Despawneando jugador {} (no es starter)", rp.id);
+            }
+        }
+
+        // Despawn non-starters
+        for entity in to_despawn {
+            commands.entity(entity).despawn();
         }
     }
 }

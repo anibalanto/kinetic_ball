@@ -1,4 +1,5 @@
 use super::map::Map;
+use super::match_slots::MatchSlots;
 use bevy::{
     math::UVec2,
     prelude::{Component, Vec2},
@@ -101,6 +102,25 @@ pub enum ControlMessage {
         min_required: ProtocolVersion,
         message: String,
     },
+    /// Admin moves a player between slots
+    MovePlayer {
+        player_id: u32,
+        /// None = spectator
+        team_index: Option<u8>,
+        /// None = spectator, Some(true) = starter, Some(false) = substitute
+        is_starter: Option<bool>,
+    },
+    /// Kick a player from the room
+    KickPlayer {
+        player_id: u32,
+    },
+    /// Toggle admin status for a player
+    ToggleAdmin {
+        player_id: u32,
+        is_admin: bool,
+    },
+    /// Slots updated - sent by server when players are moved between slots
+    SlotsUpdated(MatchSlots),
 }
 
 /// Mensajes de alta frecuencia que toleran pérdida (Canal Unreliable)
@@ -210,6 +230,9 @@ pub enum ServerMessage {
     Error {
         message: String,
     },
+
+    /// Slots updated - internal message for client processing
+    SlotsUpdated(MatchSlots),
 }
 
 /// Movimiento activo de un jugador

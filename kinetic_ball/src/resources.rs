@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::assets::SPLIT_SCREEN_SHADER_HANDLE;
 use crate::keybindings::AppConfig;
+use crate::shared::match_slots::MatchSlots;
 use crate::shared::protocol::{ControlMessage, PlayerInput, ServerMessage};
 use crate::states::RoomInfo;
 
@@ -22,8 +23,13 @@ pub struct GameTick(pub u32);
 #[derive(Resource, Default)]
 pub struct AdminPanelState {
     pub is_open: bool,
-    pub selected_player_id: Option<u32>,
+    /// Whether the local player is an admin (can move players)
+    pub is_admin: bool,
 }
+
+/// Client-side copy of match slots, synchronized from server
+#[derive(Resource, Default)]
+pub struct ClientMatchSlots(pub MatchSlots);
 
 /// Solicitud para salir de la sala (se procesa en cleanup)
 #[derive(Resource, Default)]

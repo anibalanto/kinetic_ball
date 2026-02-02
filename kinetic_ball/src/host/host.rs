@@ -9,6 +9,10 @@ use super::engine::*;
 use super::input::{GameAction, InputSource, NetworkInputSource};
 use super::network::*;
 
+/// Resource for managing player slots in the match
+#[derive(Resource, Default)]
+pub struct HostMatchSlots(pub MatchSlots);
+
 pub fn host(
     map: Option<String>,
     default_map_content: &'static str,
@@ -112,6 +116,10 @@ pub fn host(
         );
     });
 
+    // Initialize MatchSlots - first player (player_id 1) will be admin
+    let mut initial_slots = MatchSlots::default();
+    initial_slots.add_admin(1); // First player to join is admin
+
     App::new()
         .add_plugins(
             MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
@@ -128,6 +136,7 @@ pub fn host(
             1.0 / 60.0,
             TimerMode::Repeating,
         ))) // 60 Hz
+        .insert_resource(HostMatchSlots(initial_slots))
         .init_resource::<GameInputManager>()
         .add_systems(Startup, (configure_rapier, setup_game, setup_map).chain())
         .add_systems(
@@ -322,6 +331,24 @@ pub enum NetworkEvent {
     /// El jugador solicitó salir voluntariamente
     PlayerLeave {
         player_id: u32,
+    },
+    /// Admin moves a player to a different slot
+    MovePlayer {
+        admin_peer_id: PeerId,
+        player_id: u32,
+        team_index: Option<u8>,
+        is_starter: Option<bool>,
+    },
+    /// Admin kicks a player from the room
+    KickPlayer {
+        admin_peer_id: PeerId,
+        player_id: u32,
+    },
+    /// Admin toggles admin status for another player
+    ToggleAdmin {
+        admin_peer_id: PeerId,
+        player_id: u32,
+        is_admin: bool,
     },
 }
 

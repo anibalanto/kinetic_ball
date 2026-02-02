@@ -197,6 +197,17 @@ pub async fn start_webrtc_client(
                         println!("❌ [Red] Error del servidor: {}", message);
                         let _ = network_tx.send(ServerMessage::Error { message });
                     }
+                    ControlMessage::SlotsUpdated(slots) => {
+                        println!(
+                            "📊 [Red] SlotsUpdated recibido - Admins: {:?}, Starters T0: {}, T1: {}",
+                            slots.admins,
+                            slots.teams[0].starters.len(),
+                            slots.teams[1].starters.len()
+                        );
+                        // Enviar como un mensaje especial que el cliente puede procesar
+                        // Usamos un canal interno para esto
+                        let _ = network_tx.send(ServerMessage::SlotsUpdated(slots));
+                    }
                     _ => {}
                 }
             }
@@ -249,7 +260,7 @@ pub async fn start_webrtc_client(
             while input_rx.try_recv().is_ok() {}
         }
 
-        // Procesar mensajes de control desde Bevy (Leave, etc.)
+        // Procesar mensajes de control desde Bevy (Leave, MovePlayer, etc.)
         if let Some(server_id) = server_peer_id {
             while let Ok(control_msg) = control_rx.try_recv() {
                 match &control_msg {
@@ -262,6 +273,24 @@ pub async fn start_webrtc_client(
                         tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                         println!("🚪 [Red] Cerrando conexión...");
                         return; // Terminar el loop de red
+                    }
+                    ControlMessage::MovePlayer { player_id, team_index, is_starter } => {
+                        println!("📤 [Red] Enviando MovePlayer: {} -> team {:?}, starter {:?}", player_id, team_index, is_starter);
+                        if let Ok(data) = bincode::serialize(&control_msg) {
+                            socket.channel_mut(0).send(data.into(), server_id);
+                        }
+                    }
+                    ControlMessage::KickPlayer { player_id } => {
+                        println!("📤 [Red] Enviando KickPlayer: {}", player_id);
+                        if let Ok(data) = bincode::serialize(&control_msg) {
+                            socket.channel_mut(0).send(data.into(), server_id);
+                        }
+                    }
+                    ControlMessage::ToggleAdmin { player_id, is_admin } => {
+                        println!("📤 [Red] Enviando ToggleAdmin: {} -> {}", player_id, is_admin);
+                        if let Ok(data) = bincode::serialize(&control_msg) {
+                            socket.channel_mut(0).send(data.into(), server_id);
+                        }
                     }
                     _ => {}
                 }

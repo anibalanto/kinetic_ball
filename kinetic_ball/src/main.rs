@@ -157,6 +157,8 @@ fn main() {
         .insert_resource(SplitScreenTextures::default())
         // Admin panel state
         .insert_resource(AdminPanelState::default())
+        // Client match slots (synced from server)
+        .insert_resource(resources::ClientMatchSlots::default())
         // Eventos de spawning
         .add_event::<SpawnBallEvent>()
         .add_event::<SpawnPlayerEvent>()
