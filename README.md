@@ -6,8 +6,6 @@
 
 A multiplayer physics-based ball game inspired by HaxBall, written in Rust using [Bevy](https://bevyengine.org/) and [Matchbox](https://github.com/johanhelsing/matchbox) for WebRTC peer-to-peer networking.
 
-> **New!** Recently restructured into a unified application - you can now host or join games from the same app, with an integrated room browser and creation UI.
-
 [kinetic_ball.webm](https://github.com/user-attachments/assets/be8b2554-8de4-4d9b-b5e9-213c9693464f)
 
 
@@ -16,15 +14,20 @@ A multiplayer physics-based ball game inspired by HaxBall, written in Rust using
 ## Features
 
 - **Unified app**: Host or join games from the same application
+- **Local multiplayer**: 2 local players with dynamic split-screen
+- **Admin panel**: Drag & drop player management, team assignment, kick players
 - Authoritative physics simulation with Rapier2D
 - WebRTC peer-to-peer networking via matchbox_socket
-- Room/lobby system with REST API
+- Room/lobby system with REST API and auto-cleanup
 - Create and host rooms directly from the UI
-- Custom map support (HaxBall format `.hbs`, `.json`, `.json5`) (Work In Progress)
-- Configurable keybindings (saved in `~/.config/rustball/keybindings.ron`)
+- Custom map support (HaxBall format `.hbs`, `.json`, `.json5`)
+- Configurable keybindings per device (keyboard + gamepads)
+- Smart camera with dynamic zoom and split-screen transitions
 - Minimap and player detail camera
 - Kick system with curve/spin effect
-- Sprint, slide and cube mode
+- Sprint, slide and cube mode with dash/ultra-run
+- Protocol version checking for compatibility
+- Cloud deployment support (Fly.io)
 
 ## Requirements
 
@@ -150,6 +153,54 @@ To play with friends over the internet, expose the server using [ngrok](https://
 
 **Note:** The host will run the physics locally and see the game with zero latency. Remote players connect via WebRTC P2P after signaling through the proxy.
 
+### Cloud Deployment (Fly.io)
+
+The game server can be deployed to Fly.io for public hosting:
+
+```bash
+# First time setup
+fly launch
+
+# Deploy
+fly deploy
+```
+
+The server runs on `https://kinetic-ball.fly.dev` (São Paulo region by default).
+
+Configuration in `fly.toml`:
+- Runs both `matchbox_server` and `kinetic_ball_server` in a single container
+- HTTPS enforced automatically
+- Minimal resources (256MB RAM, shared CPU)
+
+## Local Multiplayer
+
+The game supports 2 local players on the same machine with dynamic split-screen.
+
+### How It Works
+
+- Connect multiple input devices (keyboards, gamepads)
+- Each device controls a separate player
+- When players are close together: single unified camera
+- When players separate: screen splits dynamically with smooth transition
+- The split line orients based on player positions
+
+### Supported Devices
+
+- Keyboard (primary)
+- Bevy-compatible gamepads
+- Generic gamepads via `gilrs`
+
+Each device can have independent keybinding configurations.
+
+### Admin Panel
+
+Press **ESC** during a game to open the admin panel (host/admin only):
+
+- **Three-column layout**: Red Team | Spectators | Blue Team
+- **Drag & drop** players between teams and slots (Starter/Substitute)
+- **Right-click menu**: Grant/revoke admin, kick players
+- **Room ID** display with copy button
+
 ## Controls
 
 ![Keyboard controls](images/keyboard.png)
@@ -164,10 +215,10 @@ Default mode that allows ball control and kicking
 | Curve left | A |
 | Curve right | D |
 | Sprint/Run | Space |
-| Don't touch ball | Shift |
+| Wildcard (Don't touch ball) | Shift |
 
 ### Cube Mode (Right Ctrl)
-Allows sliding and dribbling, always runs and doesn't interact with the ball without performing an action.
+Allows sliding and dribbling with ultra-run speed. Always runs and doesn't interact with the ball unless using the wildcard key.
 When stamina runs out, it automatically returns to sphere mode.
 
 | Action | Default Key |
@@ -176,6 +227,13 @@ When stamina runs out, it automatically returns to sphere mode.
 | Slide right | D |
 | Slide left | A |
 | Direction change | Space + arrows |
+| Wildcard (Dash - touch ball) | Shift |
+
+### Wildcard Key
+
+The **Shift** key (configurable) changes behavior based on the current mode:
+- **Sphere mode**: Prevents ball contact (pass through without touching)
+- **Cube mode**: Dash - makes contact with the ball without kicking (for dribbling)
 
 ### Settings
 | Action | Key |
@@ -248,6 +306,11 @@ To create compatible maps, you can use the [HaxBall Map Editor](https://www.haxb
 - Remote players connect P2P via WebRTC - latency depends on internet connection
 - For best results, the host should have good upload speed
 
+### Version mismatch
+- The game checks protocol version compatibility when joining rooms
+- If you see a version error, update your client to match the server's minimum required version
+- Version format follows semver (major.minor.patch)
+
 ## Architecture Evolution
 
 The project recently underwent a major restructuring (see [ADR-001](docs/adr/001-restructure-client-server-architecture.md)) to improve user experience:
@@ -266,7 +329,7 @@ The project recently underwent a major restructuring (see [ADR-001](docs/adr/001
 This project is under active development. Some ideas for contribution:
 
 - Goal system and scoreboard
-- Team selection (red/blue) in room creation
+- 4-player local split-screen
 - In-game chat
 - Replay/match recording
 - WebAssembly compilation for browser play
@@ -274,8 +337,6 @@ This project is under active development. Some ideas for contribution:
 - Netcode improvements (client-side prediction, reconciliation)
 - Integrated map editor in the UI
 - Automatic updates and distribution
-- Docker deployment for `kinetic_ball_server`
-- Auto TLS with Let's Encrypt (rustls-acme support included)
 
 ## Contributing
 
