@@ -3,6 +3,12 @@ name: Build
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: "Force deploy to Fly.io"
+        type: boolean
+        default: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,7 +30,7 @@ jobs:
           if [ -z "$PREV_TAG" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
-            CHANGES=$(git diff --name-only "$PREV_TAG"..HEAD -- kinetic_ball_server/)
+            CHANGES=$(git diff --name-only "$PREV_TAG"..HEAD -- kinetic_ball_server/ Dockerfile .dockerignore fly.toml)
             if [ -n "$CHANGES" ]; then
               echo "changed=true" >> $GITHUB_OUTPUT
             else
@@ -110,7 +116,9 @@ jobs:
   deploy-fly:
     needs: [build-linux, check-server-changes]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') && needs.check-server-changes.outputs.changed == 'true'
+    if: >-
+      (startsWith(github.ref, 'refs/tags/v') && needs.check-server-changes.outputs.changed == 'true')
+      || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_deploy == 'true')
     steps:
       - uses: actions/checkout@v4
 

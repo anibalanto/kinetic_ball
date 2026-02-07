@@ -1,8 +1,13 @@
 # Ignorar todo excepto lo necesario
 *
 
-# Incluir solo los binarios
-!kinetic_ball_server-x86_64-unknown-linux-gnu
+# Incluir binarios
+!kinetic_ball_server_linux
 !matchbox_server
+
+# Incluir archivos estáticos
+!kinetic_ball_server/static
+
+# Incluir config de Docker/Fly
 !Dockerfile
 !fly.toml
