@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="en">
     <head>
+        <link rel="icon" type="image/svg+xml" href="images/logo.svg" />
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <meta
@@ -48,21 +49,60 @@
                 z-index: 1;
             }
 
-            .logo {
-                font-size: 4rem;
-                margin-bottom: 1rem;
-                animation: float 3s ease-in-out infinite;
+            /* 1. Contenedor centrado y con tamaño controlado */
+            .logo-container {
+                position: relative;
+                width: 250px;
+                height: 250px;
+                margin: 0 auto 2rem auto;
             }
 
-            @keyframes float {
+            /* 2. Estilo base para las piezas superpuestas */
+            .logo-container img {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: auto;
+                /* Suaviza el renderizado del movimiento */
+                will-change: transform;
+            }
+
+            /* 3. Animaciones más cortas y lentas */
+            @keyframes float-subtle {
                 0%,
                 100% {
-                    transform: translateY(0px);
+                    transform: translateY(0);
                 }
-
                 50% {
-                    transform: translateY(-20px);
+                    transform: translateY(-8px);
+                } /* Movimiento muy reducido */
+            }
+
+            @keyframes float-subtle-alt {
+                0%,
+                100% {
+                    transform: translate(0, 0) rotate(0deg);
                 }
+                50% {
+                    transform: translate(2px, -6px) rotate(1deg);
+                } /* Casi imperceptible */
+            }
+
+            /* 4. Aplicación con tiempos largos para máxima suavidad */
+
+            .float-1 {
+                animation: float-subtle 5s ease-in-out infinite;
+            }
+
+            .logo-container img:nth-child(2) {
+                animation: float-subtle-alt 6s ease-in-out infinite;
+                animation-delay: 1s;
+            }
+
+            .logo-container img:nth-child(3) {
+                animation: float-subtle 7s ease-in-out infinite;
+                animation-delay: 2s;
             }
 
             h1 {
@@ -474,7 +514,26 @@
         </div>
 
         <div class="container">
-            <div class="logo">⚽</div>
+            <div class="logo-container">
+                <img
+                    src="images/logo-p1.svg"
+                    class="float-1"
+                    alt="kinetic_ball_1"
+                    width="250"
+                />
+                <img
+                    src="images/logo-p2.svg"
+                    class="float-2"
+                    alt="kinetic_ball_2"
+                    width="250"
+                />
+                <img
+                    src="images/logo-p0.svg"
+                    class="float-2"
+                    alt="kinetic_ball_2"
+                    width="250"
+                />
+            </div>
             <h1>Kinetic Ball</h1>
             <div class="lang-switcher">
                 <div class="lang-switcher-inner">
