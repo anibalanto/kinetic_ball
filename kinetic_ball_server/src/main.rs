@@ -6,6 +6,7 @@ use axum::{routing::get, Router};
 use clap::Parser;
 use std::net::SocketAddr;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::state::AppState;
@@ -63,6 +64,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Build router
     let app = Router::new()
+        // Landing page
+        .route_service("/", ServeFile::new("kinetic_ball_server/static/index.html"))
+        // Swagger UI
+        .route_service("/swagger", ServeFile::new("kinetic_ball_server/static/swagger.html"))
+        .route_service("/openapi.yaml", ServeFile::new("kinetic_ball_server/static/openapi.yaml"))
+        // Static images
+        .nest_service("/images", ServeDir::new("kinetic_ball_server/static/images"))
         // REST API
         .nest("/api", api::rooms_router())
         // WebSocket endpoints

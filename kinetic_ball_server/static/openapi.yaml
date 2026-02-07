@@ -1,0 +1,222 @@
+openapi: 3.0.3
+info:
+  title: Kinetic Ball Server API
+  description: |
+    REST API for managing game rooms in the Kinetic Ball multiplayer server.
+    
+    This API allows clients to create, list, retrieve, and delete game rooms.
+    Each room requires authentication via a token for deletion operations.
+  version: 0.7.1
+  license:
+    name: MIT-0
+    url: https://github.com/anibalanto/kinetic_ball/blob/main/LICENSE
+
+servers:
+  - url: /api
+    description: API endpoints
+
+tags:
+  - name: rooms
+    description: Game room management operations
+
+paths:
+  /rooms:
+    get:
+      tags:
+        - rooms
+      summary: List all rooms
+      description: Returns a list of all currently active game rooms
+      operationId: listRooms
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RoomInfo'
+              example:
+                - room_id: "lobby-1"
+                  name: "Main Lobby"
+                  max_players: 4
+                  current_players: 2
+                - room_id: "competitive-match"
+                  name: "Ranked Match"
+                  max_players: 2
+                  current_players: 1
+
+    post:
+      tags:
+        - rooms
+      summary: Create a new room
+      description: Creates a new game room with the specified configuration
+      operationId: createRoom
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRoomRequest'
+            example:
+              room_id: "my-custom-room"
+              name: "My Game Room"
+              max_players: 4
+      responses:
+        '201':
+          description: Room created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateRoomResponse'
+              example:
+                token: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                type: string
+              examples:
+                emptyRoomId:
+                  value: "room_id cannot be empty"
+                emptyName:
+                  value: "name cannot be empty"
+                invalidMaxPlayers:
+                  value: "max_players must be greater than 0"
+        '409':
+          description: Room already exists
+          content:
+            application/json:
+              schema:
+                type: string
+              example: "Room with this ID already exists"
+
+  /rooms/{id}:
+    get:
+      tags:
+        - rooms
+      summary: Get a specific room
+      description: Returns detailed information about a specific room
+      operationId: getRoom
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The room ID
+          schema:
+            type: string
+          example: "lobby-1"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomInfo'
+              example:
+                room_id: "lobby-1"
+                name: "Main Lobby"
+                max_players: 4
+                current_players: 2
+        '404':
+          description: Room not found
+          content:
+            application/json:
+              schema:
+                type: string
+              example: "Room 'lobby-1' not found"
+
+    delete:
+      tags:
+        - rooms
+      summary: Delete a room
+      description: Deletes a room using the authentication token received when the room was created
+      operationId: deleteRoom
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The room ID to delete
+          schema:
+            type: string
+          example: "my-custom-room"
+        - name: token
+          in: query
+          required: true
+          description: Authentication token for the room
+          schema:
+            type: string
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+      responses:
+        '204':
+          description: Room deleted successfully
+        '403':
+          description: Invalid or missing token
+          content:
+            application/json:
+              schema:
+                type: string
+              example: "Invalid authentication token"
+
+components:
+  schemas:
+    RoomInfo:
+      type: object
+      required:
+        - room_id
+        - name
+        - max_players
+        - current_players
+      properties:
+        room_id:
+          type: string
+          description: Unique identifier for the room
+          example: "lobby-1"
+        name:
+          type: string
+          description: Human-readable name of the room
+          example: "Main Lobby"
+        max_players:
+          type: integer
+          minimum: 1
+          description: Maximum number of players allowed in the room
+          example: 4
+        current_players:
+          type: integer
+          minimum: 0
+          description: Current number of players in the room
+          example: 2
+
+    CreateRoomRequest:
+      type: object
+      required:
+        - room_id
+        - name
+        - max_players
+      properties:
+        room_id:
+          type: string
+          description: Unique identifier for the new room
+          minLength: 1
+          example: "my-custom-room"
+        name:
+          type: string
+          description: Human-readable name for the room
+          minLength: 1
+          example: "My Game Room"
+        max_players:
+          type: integer
+          minimum: 1
+          description: Maximum number of players allowed
+          example: 4
+
+    CreateRoomResponse:
+      type: object
+      required:
+        - token
+      properties:
+        token:
+          type: string
+          description: Authentication token for managing the room (required for deletion)
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"

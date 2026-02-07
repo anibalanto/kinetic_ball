@@ -7,6 +7,9 @@ COPY kinetic_ball_server_linux /usr/local/bin/kinetic_ball_server
 COPY matchbox_server /usr/local/bin/matchbox_server
 RUN chmod +x /usr/local/bin/kinetic_ball_server /usr/local/bin/matchbox_server
 
+# Copiar archivos estáticos
+COPY kinetic_ball_server/static /kinetic_ball_server/static
+
 EXPOSE 3537
 
 CMD /usr/local/bin/matchbox_server & /usr/local/bin/kinetic_ball_server --port 3537 --matchbox-url ws://127.0.0.1:3536
