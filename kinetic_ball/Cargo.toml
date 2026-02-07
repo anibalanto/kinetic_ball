@@ -45,3 +45,8 @@ rfd = "0.15"
 
 # Gamepad input directo (para gamepads genéricos que gilrs/bevy no reconoce bien)
 gilrs = "0.11"
+
+# HMAC auth for API requests
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"

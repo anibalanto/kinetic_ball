@@ -1,3 +1,4 @@
+use crate::networking::hmac_auth;
 use crate::shared::*;
 use bevy::prelude::*;
 use bevy_rapier2d::prelude::*;
@@ -757,9 +758,11 @@ async fn register_room_with_proxy(
         room_id, http_url
     );
 
-    let response = client
-        .post(&url)
-        .json(&request)
+    let mut req = client.post(&url).json(&request);
+    for (key, value) in hmac_auth::auth_headers() {
+        req = req.header(key, value);
+    }
+    let response = req
         .send()
         .await
         .map_err(|e| format!("HTTP request failed: {}", e))?;

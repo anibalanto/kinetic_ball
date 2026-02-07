@@ -1,13 +1,15 @@
 mod api;
+mod auth;
 mod state;
 mod ws;
 
-use axum::{routing::get, Router};
+use axum::{middleware, response::IntoResponse, routing::get, Json, Router};
 use clap::Parser;
 use std::net::SocketAddr;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use utoipa::OpenApi;
 
 use crate::state::AppState;
 
@@ -38,6 +40,10 @@ struct Args {
     /// Use Let's Encrypt staging environment (for testing)
     #[arg(long)]
     acme_staging: bool,
+
+    /// Minimum client version required (semver, e.g. "0.7.1")
+    #[arg(long, default_value = env!("CARGO_PKG_VERSION"))]
+    min_version: String,
 }
 
 #[tokio::main]
@@ -54,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
     // Create shared state
-    let state = AppState::new(args.matchbox_url.clone());
+    let state = AppState::new(args.matchbox_url.clone(), args.min_version);
 
     // CORS configuration
     let cors = CorsLayer::new()
@@ -66,13 +72,17 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         // Landing page
         .route_service("/", ServeFile::new("kinetic_ball_server/static/index.html"))
-        // Swagger UI
+        // Swagger UI + auto-generated OpenAPI spec
         .route_service("/swagger", ServeFile::new("kinetic_ball_server/static/swagger.html"))
-        .route_service("/openapi.yaml", ServeFile::new("kinetic_ball_server/static/openapi.yaml"))
+        .route("/openapi.json", get(serve_openapi))
         // Static images
         .nest_service("/images", ServeDir::new("kinetic_ball_server/static/images"))
-        // REST API
-        .nest("/api", api::rooms_router())
+        // REST API (protected by HMAC + version middleware)
+        .nest(
+            "/api",
+            api::rooms_router()
+                .layer(middleware::from_fn_with_state(state.clone(), auth::version_middleware)),
+        )
         // WebSocket endpoints
         .route("/connect", get(ws::handle_server_ws))
         .route("/:room_id", get(ws::handle_client_ws))
@@ -88,6 +98,10 @@ async fn main() -> anyhow::Result<()> {
     } else {
         run_without_tls(app, addr, &args.matchbox_url).await
     }
+}
+
+async fn serve_openapi() -> impl IntoResponse {
+    Json(api::ApiDoc::openapi())
 }
 
 async fn run_without_tls(

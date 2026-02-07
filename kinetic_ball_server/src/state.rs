@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Status of a room
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RoomStatus {
     Open,
@@ -13,7 +13,7 @@ pub enum RoomStatus {
 }
 
 /// Information about a registered room
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RoomInfo {
     pub room_id: String,
     pub name: String,
@@ -70,7 +70,7 @@ impl RoomInfo {
 }
 
 /// Request body for creating a room
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct CreateRoomRequest {
     pub room_id: String,
     pub name: String,
@@ -82,7 +82,7 @@ pub struct CreateRoomRequest {
 }
 
 /// Response for room creation
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct CreateRoomResponse {
     pub token: String,
 }
@@ -98,15 +98,18 @@ pub struct AppState {
     pub connections: Arc<RwLock<HashMap<String, u8>>>,
     /// Matchbox server URL
     pub matchbox_url: String,
+    /// Minimum client version required (semver)
+    pub min_version: String,
 }
 
 impl AppState {
-    pub fn new(matchbox_url: String) -> Self {
+    pub fn new(matchbox_url: String, min_version: String) -> Self {
         Self {
             rooms: Arc::new(RwLock::new(HashMap::new())),
             tokens: Arc::new(RwLock::new(HashMap::new())),
             connections: Arc::new(RwLock::new(HashMap::new())),
             matchbox_url,
+            min_version,
         }
     }
 

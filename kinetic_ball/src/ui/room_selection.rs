@@ -3,6 +3,7 @@ use bevy_egui::{egui, EguiContexts};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
+use crate::networking::hmac_auth;
 use crate::resources::{ConnectionConfig, CreateRoomConfig, RoomFetchChannel, RoomList, SelectedRoom};
 use crate::states::{AppState, RoomInfo, RoomStatus};
 
@@ -29,12 +30,13 @@ pub fn fetch_rooms(
 
         let result = rt.block_on(async {
             let client = reqwest::Client::new();
-            match client
+            let mut req = client
                 .get(&url)
-                .header("ngrok-skip-browser-warning", "true")
-                .send()
-                .await
-            {
+                .header("ngrok-skip-browser-warning", "true");
+            for (key, value) in hmac_auth::auth_headers() {
+                req = req.header(key, value);
+            }
+            match req.send().await {
                 Ok(response) => {
                     let status = response.status();
                     if status.is_success() {
@@ -140,12 +142,13 @@ pub fn room_selection_ui(
 
                         let result = rt.block_on(async {
                             let client = reqwest::Client::new();
-                            match client
+                            let mut req = client
                                 .get(&url)
-                                .header("ngrok-skip-browser-warning", "true")
-                                .send()
-                                .await
-                            {
+                                .header("ngrok-skip-browser-warning", "true");
+                            for (key, value) in hmac_auth::auth_headers() {
+                                req = req.header(key, value);
+                            }
+                            match req.send().await {
                                 Ok(response) => {
                                     if response.status().is_success() {
                                         match response.json::<Vec<RoomInfo>>().await {

@@ -3,9 +3,15 @@ info:
   title: Kinetic Ball Server API
   description: |
     REST API for managing game rooms in the Kinetic Ball multiplayer server.
-    
+
     This API allows clients to create, list, retrieve, and delete game rooms.
     Each room requires authentication via a token for deletion operations.
+
+    **All endpoints require HMAC authentication headers:**
+    - `X-Client-Version` — client semver versio
+    - `X-Client-Time` — current time
+    - `X-Client-Token` — HMAC-SHA256 hex digest
+
   version: 0.7.1
   license:
     name: MIT-0
@@ -27,15 +33,19 @@ paths:
       summary: List all rooms
       description: Returns a list of all currently active game rooms
       operationId: listRooms
+      parameters:
+        - $ref: "#/components/parameters/X-Client-Version"
+        - $ref: "#/components/parameters/X-Client-Time"
+        - $ref: "#/components/parameters/X-Client-Token"
       responses:
-        '200':
+        "200":
           description: Successful response
           content:
             application/json:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/RoomInfo'
+                  $ref: "#/components/schemas/RoomInfo"
               example:
                 - room_id: "lobby-1"
                   name: "Main Lobby"
@@ -52,26 +62,30 @@ paths:
       summary: Create a new room
       description: Creates a new game room with the specified configuration
       operationId: createRoom
+      parameters:
+        - $ref: "#/components/parameters/X-Client-Version"
+        - $ref: "#/components/parameters/X-Client-Time"
+        - $ref: "#/components/parameters/X-Client-Token"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateRoomRequest'
+              $ref: "#/components/schemas/CreateRoomRequest"
             example:
               room_id: "my-custom-room"
               name: "My Game Room"
               max_players: 4
       responses:
-        '201':
+        "201":
           description: Room created successfully
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CreateRoomResponse'
+                $ref: "#/components/schemas/CreateRoomResponse"
               example:
                 token: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-        '400':
+        "400":
           description: Invalid request
           content:
             application/json:
@@ -84,7 +98,7 @@ paths:
                   value: "name cannot be empty"
                 invalidMaxPlayers:
                   value: "max_players must be greater than 0"
-        '409':
+        "409":
           description: Room already exists
           content:
             application/json:
@@ -100,6 +114,9 @@ paths:
       description: Returns detailed information about a specific room
       operationId: getRoom
       parameters:
+        - $ref: "#/components/parameters/X-Client-Version"
+        - $ref: "#/components/parameters/X-Client-Time"
+        - $ref: "#/components/parameters/X-Client-Token"
         - name: id
           in: path
           required: true
@@ -108,18 +125,18 @@ paths:
             type: string
           example: "lobby-1"
       responses:
-        '200':
+        "200":
           description: Successful response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RoomInfo'
+                $ref: "#/components/schemas/RoomInfo"
               example:
                 room_id: "lobby-1"
                 name: "Main Lobby"
                 max_players: 4
                 current_players: 2
-        '404':
+        "404":
           description: Room not found
           content:
             application/json:
@@ -134,6 +151,9 @@ paths:
       description: Deletes a room using the authentication token received when the room was created
       operationId: deleteRoom
       parameters:
+        - $ref: "#/components/parameters/X-Client-Version"
+        - $ref: "#/components/parameters/X-Client-Time"
+        - $ref: "#/components/parameters/X-Client-Token"
         - name: id
           in: path
           required: true
@@ -149,9 +169,9 @@ paths:
             type: string
           example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
       responses:
-        '204':
+        "204":
           description: Room deleted successfully
-        '403':
+        "403":
           description: Invalid or missing token
           content:
             application/json:
@@ -160,6 +180,32 @@ paths:
               example: "Invalid authentication token"
 
 components:
+  parameters:
+    X-Client-Version:
+      name: X-Client-Version
+      in: header
+      required: true
+      description: Client version
+      schema:
+        type: string
+      example: "0.7.1"
+    X-Client-Time:
+      name: X-Client-Time
+      in: header
+      required: true
+      description: Current time
+      schema:
+        type: integer
+      example: 29537774
+    X-Client-Token:
+      name: X-Client-Token
+      in: header
+      required: true
+      description: "HMAC-SHA256 hex digest"
+      schema:
+        type: string
+      example: "a3f8c2d1e4b5..."
+
   schemas:
     RoomInfo:
       type: object
