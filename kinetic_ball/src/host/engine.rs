@@ -114,9 +114,8 @@ pub fn spawn_physics(
         kick_vec: Vec2::ZERO,
         is_straight_kick: false,
         kick_charging: false,
+        kick_instant: false,
         kick_memory_timer: 0.0,
-        kick_approach_dir: None,
-        kick_approach_timer: 0.0,
         peer_id,
         is_ready: false,
         not_interacting: false,
@@ -169,24 +168,7 @@ pub fn move_players(
                 movement.x += 1.0;
             }
 
-            // StopInteract cancela el acercamiento automático
-            if game_input.is_pressed(player_id, GameAction::StopInteract) {
-                player.kick_approach_dir = None;
-                player.kick_approach_timer = 0.0;
-            }
-
-            if player.kick_approach_timer > 0.0 {
-                // Acercamiento automático: ignora input manual hasta que expire o se cancele
-                if let Some(approach_dir) = player.kick_approach_dir {
-                    velocity.linvel = approach_dir * config.player_speed_walking;
-                }
-                player.kick_approach_timer -= time.delta_secs();
-                if player.kick_approach_timer <= 0.0 {
-                    player.kick_approach_dir = None;
-                    player.kick_approach_timer = 0.0;
-                    velocity.linvel = Vec2::ZERO;
-                }
-            } else if movement.length() > 0.0 {
+            if movement.length() > 0.0 {
                 let sprint_pressed = game_input.is_pressed(player_id, GameAction::Sprint);
                 let can_sprint = player.stamin > 0.1;
 
@@ -246,10 +228,12 @@ pub fn handle_collision_player(
     }
 }
 
-// Sistema de carga de patada
-// straight_kick (X): kick_vec.x crece (potencia), kick_vec.y = 0, is_straight_kick = true
-// NSEO (WASD): kick_vec crece en la dirección nseo, is_straight_kick = false
-// power = kick_vec.length() en ambos casos
+// Potencia del disparo por defecto al presionar X sin carga previa (más suave que una carga completa)
+const DEFAULT_KICK_POWER: f32 = 0.4;
+
+// Sistema de carga de patada: solo la comba (WASD) carga (kick_vec crece en la
+// dirección NSEO, is_straight_kick = false; power = kick_vec.length()).
+// X no carga, solo dispara (ver prepare_kick_ball y detect_contact_and_kick).
 pub fn charge_kick(
     game_input: Res<GameInputManager>,
     mut players: Query<&mut Player>,
@@ -263,51 +247,42 @@ pub fn charge_kick(
 
         let player_id = player.id;
 
-        let kick_pressed = game_input.is_pressed(player_id, GameAction::Kick);
+        // Shift (wildcard/StopInteract) cancela cualquier carga activa o memorizada
+        if game_input.is_pressed(player_id, GameAction::StopInteract) {
+            player.kick_charging = false;
+            player.kick_vec = Vec2::ZERO;
+            player.is_straight_kick = false;
+            player.kick_instant = false;
+            player.kick_memory_timer = 0.0;
+            continue;
+        }
+
+        // Solo la comba (WASD) carga el disparo. X no carga, solo dispara.
         let curve_dir = game_input.get_curve_dir(player_id);
         let has_curve = curve_dir.length() > 0.01;
 
-        let any_kick_button = kick_pressed || has_curve;
-
         // Iniciar carga cuando se presiona por primera vez (sin carga activa)
-        if !player.kick_charging && any_kick_button {
+        if !player.kick_charging && has_curve {
             player.kick_charging = true;
             player.kick_vec = Vec2::ZERO;
-            player.is_straight_kick = kick_pressed && !has_curve;
+            player.is_straight_kick = false;
         }
 
-        if any_kick_button && player.kick_charging {
+        if has_curve && player.kick_charging {
             let delta = 1.0 * time.delta_secs();
-            if player.is_straight_kick {
-                // Acumular potencia en kick_vec.x
-                player.kick_vec.x = (player.kick_vec.x + delta).min(1.0);
-            } else {
-                // Acumular kick_vec en la dirección NSEO; length() = potencia
-                let dir = if has_curve {
-                    curve_dir
-                } else {
-                    player.kick_vec.normalize_or_zero()
-                };
-                player.kick_vec = (player.kick_vec + dir * delta).clamp_length_max(1.0);
-            }
+            // Acumular kick_vec en la dirección NSEO; length() = potencia
+            player.kick_vec = (player.kick_vec + curve_dir * delta).clamp_length_max(1.0);
         }
     }
 }
 
-// Sistema que prepara el kick: memoriza la carga cuando sueltas el botón
-// El kick real se aplica en detect_contact_and_kick cuando hay contacto
+// Sistema que prepara el kick: memoriza la carga cuando sueltas la comba,
+// y arma el disparo por defecto cuando se presiona X sin carga previa.
+// El kick real se aplica en detect_contact_and_kick cuando hay contacto.
 pub fn prepare_kick_ball(
-    config: Res<GameConfig>,
     game_input: Res<GameInputManager>,
     mut player_query: Query<&mut Player>,
-    sphere_query: Query<&Transform, (With<Sphere>, Without<Ball>)>,
-    ball_query: Query<&Transform, With<Ball>>,
 ) {
-    let Ok(ball_transform) = ball_query.single() else {
-        return;
-    };
-    let ball_pos = ball_transform.translation.truncate();
-
     for mut player in player_query.iter_mut() {
         // No preparar kick en modo cubo
         if player.mode_cube_active || game_input.is_pressed(player.id, GameAction::StopInteract) {
@@ -316,11 +291,10 @@ pub fn prepare_kick_ball(
 
         let player_id = player.id;
 
-        let kick_pressed = game_input.is_pressed(player_id, GameAction::Kick);
         let curve_dir = game_input.get_curve_dir(player_id);
-        let any_kick_button = kick_pressed || curve_dir.length() > 0.01;
+        let has_curve = curve_dir.length() > 0.01;
 
-        let should_release_kick = !any_kick_button && player.kick_charging;
+        let should_release_kick = !has_curve && player.kick_charging;
 
         if should_release_kick {
             player.kick_charging = false;
@@ -329,17 +303,19 @@ pub fn prepare_kick_ball(
                 // Memorizar la potencia por 1 segundo
                 // El kick se aplicará cuando haya contacto con la pelota
                 player.kick_memory_timer = 1.0;
-
-                // Memorizar dirección jugador→pelota para acercamiento automático
-                if let Ok(sphere_transform) = sphere_query.get(player.sphere) {
-                    let player_pos = sphere_transform.translation.truncate();
-                    let dir = (ball_pos - player_pos).normalize_or_zero();
-                    if dir.length() > 0.0 {
-                        player.kick_approach_dir = Some(dir);
-                        player.kick_approach_timer = config.kick_approach_duration;
-                    }
-                }
             }
+        }
+
+        // X sin carga previa: dispara con fuerza por defecto (más suave que una
+        // carga completa), solo, sin esperar otra pulsación de X.
+        if !player.kick_charging
+            && player.kick_vec.length() <= 0.0
+            && game_input.just_pressed(player_id, GameAction::Kick)
+        {
+            player.kick_vec = Vec2::new(DEFAULT_KICK_POWER, 0.0);
+            player.is_straight_kick = true;
+            player.kick_instant = true;
+            player.kick_memory_timer = 1.0;
         }
     }
 }
@@ -485,9 +461,12 @@ pub fn attract_ball(
     }
 }
 
-// Sistema que detecta contacto jugador-pelota y aplica el kick si hay carga memorizada
+// Sistema que detecta contacto jugador-pelota y aplica el kick si hay carga memorizada.
+// Requiere una pulsación de X (Kick) para ejecutar el disparo memorizado, salvo que
+// sea un disparo instantáneo (kick_instant, ver prepare_kick_ball) que se aplica solo.
 pub fn detect_contact_and_kick(
     config: Res<GameConfig>,
+    game_input: Res<GameInputManager>,
     mut player_query: Query<&mut Player>,
     sphere_query: Query<&Transform, (With<Sphere>, Without<Ball>)>,
     mut ball_query: Query<(&Transform, &mut ExternalImpulse, &mut Ball), With<Ball>>,
@@ -502,6 +481,12 @@ pub fn detect_contact_and_kick(
 
         // Solo aplicar si hay carga memorizada y no está cargando activamente
         if player.kick_vec.length() <= 0.0 || player.kick_charging {
+            continue;
+        }
+
+        // El disparo memorizado se ejecuta con una pulsación de X, salvo que ya
+        // esté marcado como instantáneo (tap rápido sin carga)
+        if !player.kick_instant && !game_input.just_pressed(player.id, GameAction::Kick) {
             continue;
         }
 
@@ -524,12 +509,11 @@ pub fn detect_contact_and_kick(
 
                     apply_kick(kick_dir, kick_charge, &config, &mut impulse, &mut ball);
 
-                    // Consumir la carga y cancelar acercamiento automático
+                    // Consumir la carga
                     player.kick_vec = Vec2::ZERO;
                     player.is_straight_kick = false;
+                    player.kick_instant = false;
                     player.kick_memory_timer = 0.0;
-                    player.kick_approach_dir = None;
-                    player.kick_approach_timer = 0.0;
                 }
             }
         }
@@ -543,9 +527,8 @@ pub fn update_kick_memory_timer(time: Res<Time>, mut player_query: Query<&mut Pl
         if player.mode_cube_active {
             player.kick_vec = Vec2::ZERO;
             player.is_straight_kick = false;
+            player.kick_instant = false;
             player.kick_memory_timer = 0.0;
-            player.kick_approach_dir = None;
-            player.kick_approach_timer = 0.0;
             continue;
         }
 
@@ -555,6 +538,7 @@ pub fn update_kick_memory_timer(time: Res<Time>, mut player_query: Query<&mut Pl
             if player.kick_memory_timer <= 0.0 {
                 player.kick_vec = Vec2::ZERO;
                 player.is_straight_kick = false;
+                player.kick_instant = false;
                 player.kick_memory_timer = 0.0;
             }
         }

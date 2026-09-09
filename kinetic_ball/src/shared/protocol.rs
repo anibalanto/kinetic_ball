@@ -363,12 +363,6 @@ pub struct GameConfig {
     #[serde(default)]
     pub map_path: Option<String>,
 
-    // Kick approach: acercamiento automático al soltar el botón de kick
-    /// Tiempo máximo (en segundos) que el jugador se acerca automáticamente a la pelota
-    /// tras soltar el botón de kick.
-    #[serde(default)]
-    pub kick_approach_duration: f32,
-
     // Set piece (jugadas a balón parado)
     /// Radio de exclusión en unidades de juego: el equipo contrario debe
     /// mantenerse fuera de este radio durante un saque (lateral, corner, puerta).
@@ -443,9 +437,6 @@ impl Default for GameConfig {
 
             // Map loading
             map_path: None,
-
-            // Kick approach
-            kick_approach_duration: 1.0,
 
             // Set piece
             set_piece_exclusion_radius: 200.0,

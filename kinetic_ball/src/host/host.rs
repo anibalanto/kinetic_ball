@@ -291,16 +291,15 @@ pub struct Player {
     pub id: u32,
     pub name: String,
     /// Vector de carga acumulado.
-    /// straight_kick: kick_vec.x crece (potencia), kick_vec.y = 0.
-    /// NSEO: kick_vec crece en dirección nseo_vec; length() = potencia.
+    /// Disparo por defecto de X (sin comba): kick_vec.x = potencia fija, kick_vec.y = 0.
+    /// Carga con comba (WASD): kick_vec crece en dirección nseo_vec; length() = potencia.
     pub kick_vec: Vec2,
-    pub is_straight_kick: bool, // true si la carga fue iniciada con X (sin comba)
+    pub is_straight_kick: bool, // true si es el disparo por defecto de X (sin comba/curva)
     pub kick_charging: bool,
+    /// true si la carga es el disparo por defecto de X (sin carga previa):
+    /// se dispara solo en el próximo contacto, sin esperar otra pulsación de X.
+    pub kick_instant: bool,
     pub kick_memory_timer: f32, // Timer de 1 segundo para potencia memorizada
-    /// Dirección memorizada (jugador→pelota normalizada) al soltar el kick.
-    pub kick_approach_dir: Option<Vec2>,
-    /// Tiempo restante de acercamiento automático tras soltar el kick.
-    pub kick_approach_timer: f32,
     pub peer_id: PeerId, // Matchbox peer ID para enviar mensajes
     pub is_ready: bool,
 
